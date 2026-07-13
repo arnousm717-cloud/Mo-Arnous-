@@ -1,0 +1,20 @@
+{
+  "extends": "@ai-revenue-os/config/typescript/nextjs.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "allowJs": true
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

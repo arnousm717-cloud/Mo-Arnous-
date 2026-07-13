@@ -1,0 +1,15 @@
+{
+  "name": "@ai-revenue-os/database",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "supabase start",
+    "stop": "supabase stop",
+    "migration:new": "supabase migration new",
+    "migration:up": "supabase migration up",
+    "typecheck": "echo 'no TypeScript source yet — generated types land in M1.2' && exit 0"
+  },
+  "devDependencies": {
+    "supabase": "^2.109.1"
+  }
+}
