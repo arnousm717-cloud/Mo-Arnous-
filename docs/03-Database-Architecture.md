@@ -193,7 +193,7 @@ create policy "tenant_isolation_write" on contacts
   with check (organization_id = current_org());
 ```
 
-**Tenant-context resolution — one mechanism, every caller type.** `current_org()`, `current_agency()`, and `current_role()` are `security definer` SQL functions that read from a **request-scoped Postgres session setting** (`set_config('app.current_org', ..., true)`, transaction-local), populated by a single piece of API middleware at the start of every request — not baked into a static JWT claim at session start. This one mechanism serves every caller type identically:
+**Tenant-context resolution — one mechanism, every caller type.** `current_org()`, `current_agency()`, and `current_role_key()` are `security definer` SQL functions that read from a **request-scoped Postgres session setting** (`set_config('app.current_org', ..., true)`, transaction-local), populated by a single piece of API middleware at the start of every request — not baked into a static JWT claim at session start. This one mechanism serves every caller type identically:
 - **JWT-session users**: middleware resolves the org the user is currently acting as (from the request path/header, validated against their `memberships`) and sets it for that request. Switching organizations in the UI (e.g., an agency admin entering a client org, `07-UI-UX-System.md` §6) takes effect on the very next request — there is no stale-JWT-claim problem, because the claim isn't where this is read from.
 - **API-key callers**: middleware resolves the key's bound `organization_id` (§2.1 `api_keys`) and sets it identically.
 - **n8n**: the same middleware path validates the workflow's `api_keys` row (scoped to a `service` role, `04-API-Architecture.md` §3) and sets the org it's authorized for — n8n never receives elevated or unscoped database access; it is subject to exactly the same per-request tenant resolution as any other caller.
@@ -205,8 +205,10 @@ create view agency_rollup_deals as
   select d.* from deals d
   join organizations o on o.id = d.organization_id
   where o.agency_id = current_agency()
-    and current_role() in ('agency_owner', 'agency_admin');
+    and current_role_key() in ('agency_owner', 'agency_admin');
 ```
+
+Named `current_role_key()`, not `current_role()` — implemented this way in M1.2 specifically to avoid ambiguity with PostgreSQL's own SQL-standard `CURRENT_ROLE` construct (see ADR-003).
 
 This keeps the blanket cross-org read path explicit, named, and auditable — a bug in the base `contacts`/`deals` policy can never silently leak cross-client data, because the roll-up path is structurally separate.
 

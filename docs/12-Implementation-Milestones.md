@@ -34,7 +34,7 @@ Breaks `09-Development-Roadmap.md`'s phases into small, independently-deployable
 
 - **Goal**: A real person can sign up, get an organization, and log back in — the first end-to-end slice a human can actually use.
 - **Deliverables**: Supabase Auth wired into `packages/auth`; signup creates `users` + `organizations` + `memberships` (as `org_admin`) in one transaction; login; the API middleware resolving `organization_id` per request for JWT-session callers specifically (other caller types land in later milestones once they exist).
-- **Database migrations**: None beyond M1.2.
+- **Database migrations**: A `SECURITY DEFINER` function performing the atomic signup transaction (not a plain client-issued `INSERT ... RETURNING`) — M1.2 found that Postgres requires the `SELECT` policy to also pass for `RETURNING`, which a brand-new organization row can never satisfy under `id = current_org()` (ADR-003). Otherwise none beyond M1.2.
 - **API changes**: Supabase Auth-backed signup/login endpoints wired through the app; session middleware.
 - **UI changes**: Signup page, login page, a bare authenticated shell ("Welcome, {org name}").
 - **AI changes**: None.

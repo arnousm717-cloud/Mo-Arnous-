@@ -7,9 +7,17 @@
     "stop": "supabase stop",
     "migration:new": "supabase migration new",
     "migration:up": "supabase migration up",
-    "typecheck": "echo 'no TypeScript source yet — generated types land in M1.2' && exit 0"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint tests scripts"
   },
   "devDependencies": {
-    "supabase": "^2.109.1"
+    "@ai-revenue-os/config": "workspace:*",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
+    "pg": "^8.13.0",
+    "supabase": "^2.109.1",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
   }
 }
