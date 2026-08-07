@@ -17,6 +17,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@ai-revenue-os/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@ai-revenue-os/tenancy':
+        specifier: workspace:*
+        version: link:../../packages/tenancy
       next:
         specifier: ^15.1.0
         version: 15.5.20(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -43,6 +49,34 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/auth:
+    dependencies:
+      '@ai-revenue-os/database':
+        specifier: workspace:*
+        version: link:../database
+      '@supabase/ssr':
+        specifier: ^0.12.4
+        version: 0.12.4(@supabase/supabase-js@2.112.1)
+      '@supabase/supabase-js':
+        specifier: ^2.112.1
+        version: 2.112.1
+    devDependencies:
+      '@ai-revenue-os/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      next:
+        specifier: ^15.1.0
+        version: 15.5.20(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.1)
+
   packages/config:
     devDependencies:
       '@types/node':
@@ -62,6 +96,10 @@ importers:
         version: 5.9.3
 
   packages/database:
+    dependencies:
+      pg:
+        specifier: ^8.13.0
+        version: 8.22.0
     devDependencies:
       '@ai-revenue-os/config':
         specifier: workspace:*
@@ -72,12 +110,31 @@ importers:
       '@types/pg':
         specifier: ^8.11.0
         version: 8.20.4
-      pg:
-        specifier: ^8.13.0
-        version: 8.22.0
       supabase:
         specifier: ^2.109.1
         version: 2.109.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/tenancy:
+    dependencies:
+      '@ai-revenue-os/database':
+        specifier: workspace:*
+        version: link:../database
+    devDependencies:
+      '@ai-revenue-os/config':
+        specifier: workspace:*
+        version: link:../config
+      '@supabase/supabase-js':
+        specifier: ^2.112.1
+        version: 2.112.1
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -666,6 +723,10 @@ packages:
   '@rushstack/eslint-patch@1.16.1':
     resolution: {integrity: sha512-TvZbIpeKqGQQ7X0zSCvPH9riMSFQFSggnfBjFZ1mEoILW+UuXCKwOoPcgjMwiUtRqFZ8jWhPJc4um14vC6I4ag==}
 
+  '@supabase/auth-js@2.112.1':
+    resolution: {integrity: sha512-TBacB69YXSYYFFet9ISgNC2jsPExFPIWngmzeLHAWrp/xvKWfYIyhh0nyvDLryi8WP6KoexkXO9kRF6Y9oBUTA==}
+    engines: {node: '>=22.0.0'}
+
   '@supabase/cli-darwin-arm64@2.109.1':
     resolution: {integrity: sha512-tkn8tfunyqIL7RE+7DVjg6Ql2cJLPkGgh9cPafp2LbXI0qDgds0TaS+UOTHQEjci8JQXXe2wS00+122ko2QI8A==}
     cpu: [arm64]
@@ -705,6 +766,39 @@ packages:
     resolution: {integrity: sha512-L9/pDLM+4IR8646aT69ZDVcnJeg1lZZsB26ZgI775S3f8jOHP41+1UH9Oq1g9CvKiAQviuaLgtwkuvi0I/cc/A==}
     cpu: [x64]
     os: [win32]
+
+  '@supabase/functions-js@2.112.1':
+    resolution: {integrity: sha512-t5L8qBpRC2ZswHD4A7DNL/sNpFLEeflaYaZVe5dCWvAD82pm2WOysU8EKgiJub3doxo/QU8RuDvYFlRyRk8ghw==}
+    engines: {node: '>=22.0.0'}
+
+  '@supabase/phoenix@0.4.5':
+    resolution: {integrity: sha512-aAn9H9ovVyeApKy11OWOrrOGq8DV68yWeH4ud2lN9fzn4aO8Zb5GLL9m1pUg9nLqIcT+ZDfAcsZe0E/nqdv2lw==}
+
+  '@supabase/postgrest-js@2.112.1':
+    resolution: {integrity: sha512-oX42JgoVT8bP73/XYE1+kQdj6/Ql1j6lD6zpCoL8aq1B0uhZsz4FSoT+cBJB3pi4aPZEA0Ntkid6w7uzuAH5jQ==}
+    engines: {node: '>=22.0.0'}
+
+  '@supabase/realtime-js@2.112.1':
+    resolution: {integrity: sha512-jp5TgXXTb1m2rqF6kiirOhVnvAoFHrjj7ZHOzWRa+SL+Am0BbcMcQr6FyHkJJS1ngw0TAL2DeymfGgKkSanN0A==}
+    engines: {node: '>=22.0.0'}
+
+  '@supabase/ssr@0.12.4':
+    resolution: {integrity: sha512-xHzcgI8cC1TpBKSwJcR5Yd8CCwfIq0SBc5yb4yz/YFw5tbCrEQ0QT3a+2jymCxHgQWLfzwN93HZ6eRbcoMkOlA==}
+    peerDependencies:
+      '@supabase/supabase-js': ^2.111.0
+
+  '@supabase/storage-js@2.112.1':
+    resolution: {integrity: sha512-FHKAQTw4KUV9nF3bnOLvZvjB3bkmtl6ltavlJfdJKdabvqMtQQ2iyBliFyp2dSHMCn9qA8c6WoZoRkgV5nxAmg==}
+    engines: {node: '>=22.0.0'}
+
+  '@supabase/supabase-js@2.112.1':
+    resolution: {integrity: sha512-KooEPqALZNkQCr1PBhbEImnPm6Ko6TKWiOrj3UxQki74g2KWlXGleQgEudUwRAKZs5U1ilSssO0TpxgVOspihQ==}
+    engines: {node: '>=22.0.0'}
+    peerDependencies:
+      '@opentelemetry/api': '>=1.0.0'
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
 
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
@@ -1108,6 +1202,10 @@ packages:
   concat-map@0.0.1:
     resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
 
+  cookie@1.1.1:
+    resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
+    engines: {node: '>=18'}
+
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
@@ -1484,6 +1582,10 @@ packages:
   hasown@2.0.4:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
+
+  iceberg-js@0.8.1:
+    resolution: {integrity: sha512-1dhVQZXhcHje7798IVM+xoo/1ZdVfzOMIc8/rgVSijRK38EDqOJoGula9N/8ZI5RD8QTxNQtK/Gozpr+qUqRRA==}
+    engines: {node: '>=20.0.0'}
 
   ignore@5.3.2:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
@@ -2670,6 +2772,10 @@ snapshots:
 
   '@rushstack/eslint-patch@1.16.1': {}
 
+  '@supabase/auth-js@2.112.1':
+    dependencies:
+      tslib: 2.8.1
+
   '@supabase/cli-darwin-arm64@2.109.1':
     optional: true
 
@@ -2693,6 +2799,39 @@ snapshots:
 
   '@supabase/cli-windows-x64@2.109.1':
     optional: true
+
+  '@supabase/functions-js@2.112.1':
+    dependencies:
+      tslib: 2.8.1
+
+  '@supabase/phoenix@0.4.5': {}
+
+  '@supabase/postgrest-js@2.112.1':
+    dependencies:
+      tslib: 2.8.1
+
+  '@supabase/realtime-js@2.112.1':
+    dependencies:
+      '@supabase/phoenix': 0.4.5
+      tslib: 2.8.1
+
+  '@supabase/ssr@0.12.4(@supabase/supabase-js@2.112.1)':
+    dependencies:
+      '@supabase/supabase-js': 2.112.1
+      cookie: 1.1.1
+
+  '@supabase/storage-js@2.112.1':
+    dependencies:
+      iceberg-js: 0.8.1
+      tslib: 2.8.1
+
+  '@supabase/supabase-js@2.112.1':
+    dependencies:
+      '@supabase/auth-js': 2.112.1
+      '@supabase/functions-js': 2.112.1
+      '@supabase/postgrest-js': 2.112.1
+      '@supabase/realtime-js': 2.112.1
+      '@supabase/storage-js': 2.112.1
 
   '@swc/helpers@0.5.15':
     dependencies:
@@ -3112,6 +3251,8 @@ snapshots:
   color-name@1.1.4: {}
 
   concat-map@0.0.1: {}
+
+  cookie@1.1.1: {}
 
   cross-spawn@7.0.6:
     dependencies:
@@ -3663,6 +3804,8 @@ snapshots:
   hasown@2.0.4:
     dependencies:
       function-bind: 1.1.2
+
+  iceberg-js@0.8.1: {}
 
   ignore@5.3.2: {}
 

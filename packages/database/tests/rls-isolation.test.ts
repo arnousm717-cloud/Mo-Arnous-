@@ -43,16 +43,17 @@ async function seedFixture(): Promise<Fixture> {
 
     const userAId = randomUUID();
     const userBId = randomUUID();
+    // Inserting into auth.users is sufficient as of M1.3 — the
+    // handle_new_auth_user() trigger (see migration
+    // 20260806100250_sync_auth_users_to_public.sql) now creates the matching
+    // public.users row automatically. A separate manual insert here would
+    // collide with the trigger's own insert on the same primary key.
     await client.query("insert into auth.users (id, email) values ($1, $2), ($3, $4)", [
       userAId,
       `user-a-${userAId}@example.test`,
       userBId,
       `user-b-${userBId}@example.test`,
     ]);
-    await client.query(
-      "insert into public.users (id, email) values ($1, $2), ($3, $4)",
-      [userAId, `user-a-${userAId}@example.test`, userBId, `user-b-${userBId}@example.test`],
-    );
 
     await client.query(
       "insert into public.memberships (user_id, organization_id, role_id, status) values ($1, $2, $3, 'active')",

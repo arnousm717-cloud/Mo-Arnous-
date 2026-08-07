@@ -6,5 +6,5 @@
     "noEmit": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules", "supabase"]
+  "exclude": ["node_modules"]
 }

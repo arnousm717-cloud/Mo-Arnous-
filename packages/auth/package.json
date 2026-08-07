@@ -1,0 +1,26 @@
+{
+  "name": "@ai-revenue-os/auth",
+  "version": "0.0.0",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./middleware": "./src/middleware.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-revenue-os/database": "workspace:*",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.1"
+  },
+  "devDependencies": {
+    "@ai-revenue-os/config": "workspace:*",
+    "@types/node": "^22.10.0",
+    "next": "^15.1.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

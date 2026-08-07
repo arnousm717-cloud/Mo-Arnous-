@@ -160,7 +160,15 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# The /auth/callback entries are required for the PKCE email-confirmation
+# flow (apps/web/app/auth/callback/route.ts) — without an exact match here,
+# GoTrue silently falls back to site_url instead of honoring emailRedirectTo,
+# and the confirmation link never reaches the callback route at all.
+additional_redirect_urls = [
+  "https://127.0.0.1:3000",
+  "http://127.0.0.1:3000/auth/callback",
+  "http://localhost:3000/auth/callback",
+]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -179,10 +187,12 @@ enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
-minimum_password_length = 6
+# Deliberately raised from the CLI default of 6 (docs/13-Technical-Design-Review.md M1.3 §5:
+# password policy must be an explicit, reviewed decision, not left at platform defaults).
+minimum_password_length = 8
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
-password_requirements = ""
+password_requirements = "lower_upper_letters_digits"
 
 # Configure passkey sign-ins.
 # [auth.passkey]
@@ -223,7 +233,12 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+# Deliberately enabled (docs/13-Technical-Design-Review.md M1.3 §5: decide
+# deliberately whether org_admin access requires email verification first).
+# create_organization_with_owner() grants org_admin at signup time — without
+# this, anyone could sign up with an email address they don't control and
+# immediately act as org_admin on a brand-new organization.
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
