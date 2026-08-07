@@ -1,3 +1,4 @@
+import { can } from "@ai-revenue-os/auth";
 import { createClientOrganizationForAgency } from "@ai-revenue-os/tenancy";
 
 /**
@@ -16,8 +17,6 @@ export interface CreateClientOrgFormState {
   error?: string;
 }
 
-const AGENCY_WRITE_ROLES = new Set(["agency_owner", "agency_admin"]);
-
 export async function createClientOrgForResolvedContext(
   agencyContext: { userId: string; agencyId: string; roleKey: string } | null,
   name: string,
@@ -25,7 +24,15 @@ export async function createClientOrgForResolvedContext(
   if (!name.trim()) {
     return { error: "Organization name is required." };
   }
-  if (!agencyContext || !AGENCY_WRITE_ROLES.has(agencyContext.roleKey)) {
+  // The role check goes through can() (M1.5's RBAC facade) rather than an
+  // inline role-string comparison — same permission key
+  // ("organizations:create-client") the API route checks, so both entry
+  // points into the same underlying action stay behaviorally identical.
+  // The explicit `!agencyContext` here is redundant with can()'s own null
+  // handling at runtime (can(null, ...) already denies) — it's here purely
+  // so TypeScript narrows agencyContext to non-null for the code below;
+  // can() itself doesn't narrow, being just a boolean-returning function.
+  if (!agencyContext || !can(agencyContext, "organizations:create-client")) {
     return { error: "You do not have permission to create client organizations." };
   }
 

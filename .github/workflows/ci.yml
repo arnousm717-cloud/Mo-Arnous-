@@ -25,3 +25,32 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
+
+      # Starts the same local Supabase CLI stack (Postgres, GoTrue, Mailpit)
+      # already used identically in local dev — ubuntu-latest runners have
+      # Docker pre-installed, so this needs no new runner configuration.
+      # Every test file in this repo defaults DATABASE_URL/the Supabase
+      # URL+anon+service-role keys to the CLI's well-known, publicly
+      # documented local demo values (never valid against a real project),
+      # so this step needs zero GitHub Secrets. `start` applies every
+      # pending migration automatically on its very first run against a
+      # fresh volume — verified empirically (not assumed) by tearing down
+      # the local stack's Docker volume entirely and confirming a clean
+      # `start` alone leaves all M1.1-M1.5 migrations applied, which is
+      # exactly the state every GitHub Actions runner begins in.
+      #
+      # Services excluded (-x) are verified unused by the test suite (M1.5
+      # CI hardening): no test/application code references Storage,
+      # Realtime, Edge Functions, imgproxy, Studio, or PostgREST's
+      # supabase-js `.from()` API (ADR-004 — the app only ever queries
+      # Postgres directly), and tests connect straight to Postgres on
+      # 54322, not through Supavisor. gotrue, mailpit, and kong (the
+      # gateway that serves GoTrue on the shared 54321 port every test
+      # connects to) are kept — packages/auth's real-session tests and the
+      # email-confirmation-callback test genuinely need them. This exact
+      # exclusion list was verified against a fully wiped local volume
+      # (`docker ps` confirmed only db/auth/kong/mailpit remained running,
+      # everything else genuinely stopped) before being written here.
+      - run: pnpm --filter @ai-revenue-os/database exec supabase start -x realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,postgrest
+
+      - run: pnpm test

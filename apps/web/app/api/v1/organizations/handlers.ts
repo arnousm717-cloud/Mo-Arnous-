@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveAgencyContextForUser, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
+import { can, resolveAgencyContextForUser, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
 import {
   createClientOrganizationForAgency,
   getOrganizationById,
@@ -7,7 +7,6 @@ import {
   type OrganizationSummary,
 } from "@ai-revenue-os/tenancy";
 
-const AGENCY_WRITE_ROLES = new Set(["agency_owner", "agency_admin"]);
 const MAX_NAME_LENGTH = 200;
 
 /**
@@ -83,7 +82,10 @@ interface CreateOrganizationBody {
  * only under their own agency — agencyId comes exclusively from
  * resolveAgencyContextForUser (server-resolved from the caller's real
  * membership row), never from the request body, so there is nothing in the
- * payload a client could supply to target a different agency.
+ * payload a client could supply to target a different agency. The role
+ * check itself goes through can() (M1.5's RBAC facade) rather than an
+ * inline role-string comparison — see permission key
+ * "organizations:create-client" in packages/auth/src/permissions.ts.
  * create_client_organization_for_agency() (M1.4 backend checkpoint)
  * re-verifies this same authorization independently as defense-in-depth —
  * this route's own check is not the only gate.
@@ -97,7 +99,11 @@ export async function handleCreateOrganization(
   }
 
   const agencyContext = await resolveAgencyContextForUser(userId);
-  if (!agencyContext || !AGENCY_WRITE_ROLES.has(agencyContext.roleKey)) {
+  // The explicit `!agencyContext` here is redundant with can()'s own null
+  // handling at runtime (can(null, ...) already denies) — it's here purely
+  // so TypeScript narrows agencyContext to non-null for the code below;
+  // can() itself doesn't narrow, being just a boolean-returning function.
+  if (!agencyContext || !can({ userId, ...agencyContext }, "organizations:create-client")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

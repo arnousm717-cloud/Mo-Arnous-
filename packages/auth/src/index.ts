@@ -13,6 +13,13 @@ export {
   type AgencyMembershipContext,
 } from "./agency-context";
 export { signUpWithPassword, signInWithPassword, signOut, AuthError, type AuthResult } from "./actions";
+export {
+  can,
+  PERMISSION_MATRIX,
+  type Actor,
+  type PermissionKey,
+  type ResourceContext,
+} from "./permissions";
 // refreshSession and exchangeAuthCode are deliberately NOT re-exported here
 // — they must be imported from "@ai-revenue-os/auth/middleware" directly.
 // This barrel pulls in resolveRequestContext, which depends on pg (Node-only

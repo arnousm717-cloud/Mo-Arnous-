@@ -33,6 +33,27 @@ Three pillars, not two:
 - AI agents carry no standing permission beyond what the triggering user/organization context already grants — a tool call an agent makes is checked identically to the equivalent human action (`05-AI-Agent-Architecture.md` §1), **and consequential tools additionally require the human-approval gate described in §2** — RBAC scoping and approval gating are independent controls, both required where applicable, not substitutes for each other.
 - API keys carry their own scoped permission subset independent of the issuing user's role, so a key can be handed to a third party without over-granting.
 
+### 3.1 Agency-scoped vs. organization-scoped permissions (M1.5)
+
+Two roles operate agency-wide (`agency_owner`, `agency_admin`); four operate within a single organization (`org_admin`, `org_member`, `org_viewer`, `portal_customer`). An actor carries exactly one role at a time, scoped to whichever context it was resolved from — an `agency_owner`'s actor object is built from their agency context, an `org_admin`'s from their organization context, never both combined into one ambiguous object (`docs/adr/ADR-005-agency-level-membership-model.md`). `can()`'s permission keys are namespaced by which scope they apply to, not by a separate parameter: `agencies:*` keys are only ever granted to agency-scoped roles, `organizations:*` keys only to organization-scoped roles (or, for `organizations:list-clients`/`organizations:create-client` specifically, to agency-scoped roles acting *on* client organizations — the one place the two scopes intentionally meet, since managing an agency's client roster is inherently an agency-level action about organization-shaped resources).
+
+**Billing is the case that most needed disambiguating**, since both agencies and standalone organizations independently carry their own `plan`/`stripe_customer_id` (`docs/03-Database-Architecture.md` §2.1) — there are genuinely two different billing relationships, not one:
+
+| Permission | agency_owner | agency_admin | org_admin | org_member | org_viewer | portal_customer |
+|---|---|---|---|---|---|---|
+| `organizations:read` (own org) | — | — | ✅ | ✅ | ✅ | — |
+| `organizations:list-clients` (agency roll-up) | ✅ | ✅ | — | — | — | — |
+| `organizations:create-client` | ✅ | ✅ | — | — | — | — |
+| `organizations:manage-billing` (a standalone org's own billing) | — | — | ✅ | — | — | — |
+| `organizations:manage-users` | — | — | ✅ | — | — | — |
+| `organizations:manage-settings` | — | — | ✅ | — | — | — |
+| `agencies:read` (own agency) | ✅ | ✅ | — | — | — | — |
+| `agencies:manage-branding` | ✅ | ✅ | — | — | — | — |
+| `agencies:manage-billing` (the agency's own billing) | ✅ | ❌ | — | — | — | — |
+| `agencies:manage-domains` | ✅ | ✅ | — | — | — | — |
+
+`agencies:manage-billing` and `organizations:manage-billing` are **never granted to the same role** — an agency's own billing relationship and a standalone organization's own billing relationship are different resources with different owners, even though the English word "billing" is the same in both rows. `agency_admin` explicitly does not receive `agencies:manage-billing` (a deliberate decision, not an oversight — matches this table's own pre-M1.5 "no billing/plan changes" note, now enforced rather than only documented). The full matrix, including CRM-adjacent permissions that don't exist as enforceable actions yet (no CRM tables exist as of M1.5), lives in `packages/auth/src/permissions.ts` — this table mirrors it for the scope actually built so far and must be kept in sync as new permissions are added there.
+
 ## 4. Encryption
 
 - **In transit**: TLS everywhere (Vercel, Supabase, n8n instance, all provider calls) — no unencrypted internal traffic, including app-to-n8n webhook calls.
