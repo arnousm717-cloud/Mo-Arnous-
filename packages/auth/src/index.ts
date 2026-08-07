@@ -1,6 +1,17 @@
 export { createSupabaseServerClient } from "./supabase-server-client";
 export { getAuthenticatedUser, type AuthenticatedUser } from "./session";
-export { resolveRequestContext, type ResolvedRequestContext } from "./request-context";
+export {
+  resolveRequestContext,
+  resolveOrganizationContextForUser,
+  type ResolvedRequestContext,
+  type OrganizationContext,
+} from "./request-context";
+export {
+  resolveAgencyRequestContext,
+  resolveAgencyContextForUser,
+  type ResolvedAgencyContext,
+  type AgencyMembershipContext,
+} from "./agency-context";
 export { signUpWithPassword, signInWithPassword, signOut, AuthError, type AuthResult } from "./actions";
 // refreshSession and exchangeAuthCode are deliberately NOT re-exported here
 // — they must be imported from "@ai-revenue-os/auth/middleware" directly.

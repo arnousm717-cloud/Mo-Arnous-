@@ -37,6 +37,24 @@
 
 Standard verbs apply per resource: `GET` (list/detail), `POST` (create), `PATCH` (partial update), `DELETE`. No resource uses `PUT` — partial updates only, to avoid accidental full-object overwrites. **`DELETE` on an ordinary CRM resource (`contacts`, `companies`, `deals`, `proposals`) is the recoverable soft-delete described in `03-Database-Architecture.md`'s deletion model — it does not, by itself, satisfy a GDPR erasure obligation.** That is only ever fulfilled via `DELETE /api/v1/data-subject-requests/{id}`, which drives the hard-delete/anonymization cascade. This distinction is stated explicitly here because conflating the two is one of the most common real-world compliance mistakes in CRM-shaped APIs.
 
+### 2.1 `/api/v1/organizations` — implemented contract (M1.4)
+
+The first resource actually built beyond the health check, so its real contract is recorded here rather than left to match the general table above by assumption.
+
+- **`GET /api/v1/organizations`** — session auth only (no API-key path yet). Response shape is always `{ organizations: [...] }`, never a bare array, so the envelope can carry pagination/metadata later without a breaking change. What's returned depends entirely on server-resolved context, never a query parameter:
+  - `agency_owner`/`agency_admin` → every client organization under their agency, via the `agency_rollup_organizations` view (`03-Database-Architecture.md` §5) — never a broadened query against the base `organizations` table.
+  - An ordinary org-level user → their own single organization, as a one-item array.
+  - An authenticated user with neither (no membership at all yet) → `{ organizations: [] }`, not an error — same "route to onboarding" philosophy as `get_my_membership_context()`.
+  - No authenticated session at all → `401`.
+  - A user holding both an agency-level and an organization-level membership gets the agency view — agency context takes precedence when present.
+- **`POST /api/v1/organizations`** — creates a client organization under the caller's own agency. `201` with `{ organization: { id, name, slug } }` on success.
+  - `403` if the caller isn't an active `agency_owner`/`agency_admin` of some agency — includes ordinary org-level users and unauthenticated-but-somehow-past-401 edge cases alike.
+  - `agency_id` is **never** read from the request body — it comes exclusively from the caller's server-resolved agency membership. A body field named `agencyId` is silently ignored; it cannot be used to target a different agency (verified by test).
+  - `400` for a missing/empty/non-string `name`, or a `name` over 200 characters. `400` for a malformed JSON body.
+  - Slug collisions are handled transparently server-side (the same generate-and-retry-on-conflict pattern as individual-user org signup) — a client never sees a slug conflict; two organizations may share the same `name`, they just get distinct auto-generated slugs.
+  - `500` (generic, no internal detail) only if organization creation fails for a reason other than the above — e.g. the slug-retry budget is exhausted, astronomically unlikely in practice.
+  - A same-origin check on the `Origin` header (when present) returns `403` for a cross-origin `POST`, as defense-in-depth alongside the session cookie's own `sameSite: "lax"` default.
+
 ## 3. Authentication
 
 Three distinct authentication paths:
