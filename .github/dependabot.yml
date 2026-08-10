@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Root workspace covers the whole pnpm monorepo (apps/web, packages/*) —
+  # Dependabot resolves the workspace graph from the single root lockfile.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    # Update PRs only — no auto-merge configured. A human reviews and merges
+    # every dependency update, same as any other PR (docs/10-CLAUDE.md).
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10

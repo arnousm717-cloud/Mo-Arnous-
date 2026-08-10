@@ -1,13 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAuthenticatedUser } from "@ai-revenue-os/auth";
+import { withRequestLogging } from "../_shared/logger";
 import { handleCreateOrganization, handleGetOrganizations, isSameOrigin } from "./handlers";
 
-export async function GET() {
+export const GET = withRequestLogging("GET", "/api/v1/organizations", async () => {
   const user = await getAuthenticatedUser();
   return handleGetOrganizations(user?.id ?? null);
-}
+});
 
-export async function POST(request: NextRequest) {
+export const POST = withRequestLogging("POST", "/api/v1/organizations", async (request: NextRequest) => {
   if (!isSameOrigin(request.headers.get("origin"), request.url)) {
     return NextResponse.json({ error: "Invalid origin" }, { status: 403 });
   }
@@ -22,4 +23,4 @@ export async function POST(request: NextRequest) {
   }
 
   return handleCreateOrganization(user?.id ?? null, body);
-}
+});

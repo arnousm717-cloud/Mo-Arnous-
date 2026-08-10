@@ -22,6 +22,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Merge-blocking per docs/10-CLAUDE.md §8: a known high/critical
+      # dependency vulnerability fails the build, not a follow-up ticket
+      # (M1.8, docs/08-Security.md §10). Dependabot (.github/dependabot.yml)
+      # separately opens update PRs on a schedule; this step is what
+      # actually enforces the gate on every PR.
+      - run: pnpm audit --audit-level=high
+
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
