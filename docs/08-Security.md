@@ -51,6 +51,12 @@ Two roles operate agency-wide (`agency_owner`, `agency_admin`); four operate wit
 | `agencies:manage-branding` | ✅ | ✅ | — | — | — | — |
 | `agencies:manage-billing` (the agency's own billing) | ✅ | ❌ | — | — | — | — |
 | `agencies:manage-domains` | ✅ | ✅ | — | — | — | — |
+| `consent:record` (M1.6) | — | — | ✅ | — | — | — |
+| `data-subject-requests:create` (M1.6) | — | — | ✅ | — | — | — |
+| `data-subject-requests:read` (M1.6) | — | — | ✅ | — | — | — |
+| `data-subject-requests:execute` (M1.6) | — | — | ✅ | — | — | — |
+
+The four M1.6 rows are `org_admin`-only by explicit decision — neither agency-scoped role gets any compliance-data access yet, even though they otherwise hold broad agency-wide grants elsewhere in this table (`docs/12-Implementation-Milestones.md` M1.6). This is a deliberate scope narrowing, not an oversight: agency-facing compliance workflows (e.g., an agency admin filing erasure requests on behalf of a client org) are real future scope but were never designed as part of M1.6, so extending access there now would be granting a permission ahead of the workflow it's meant to support.
 
 `agencies:manage-billing` and `organizations:manage-billing` are **never granted to the same role** — an agency's own billing relationship and a standalone organization's own billing relationship are different resources with different owners, even though the English word "billing" is the same in both rows. `agency_admin` explicitly does not receive `agencies:manage-billing` (a deliberate decision, not an oversight — matches this table's own pre-M1.5 "no billing/plan changes" note, now enforced rather than only documented). The full matrix, including CRM-adjacent permissions that don't exist as enforceable actions yet (no CRM tables exist as of M1.5), lives in `packages/auth/src/permissions.ts` — this table mirrors it for the scope actually built so far and must be kept in sync as new permissions are added there.
 
@@ -71,12 +77,24 @@ Two roles operate agency-wide (`agency_owner`, `agency_admin`); four operate wit
 - **Right to rectification**: standard CRM edit flows satisfy this for contact-controlled data; portal users get a self-service profile edit as part of the Customer Portal (Phase 6).
 - **Aggregation risk**: because the Brain's entire purpose is connecting signal across sources, a single tenant-scoping bug in its retrieval path (e.g., a semantic search missing an `organization_id` filter) has a larger blast radius than an equivalent bug anywhere else in the platform. `brain.semantic_search` results are filtered by `organization_id` at the query level *and* re-checked at the application layer before being returned to any persona — explicit defense-in-depth for this specific risk (`11-AI-Revenue-Brain.md` §10).
 
+### 5.1 M1.6 implementation scope
+
+The erasure cascade described above is real and enforced (`preview_user_erasure`/`execute_user_erasure`, `03-Database-Architecture.md` §2.8), scoped narrowly on purpose:
+
+- **Subject**: only `data_subject_requests.subject_type = 'user'` (a staff `public.users` row) is executable — no `contacts`/`visitors`/`portal_users` exist yet, so this milestone proves the mechanism against the one real personal-data table the platform currently has. `access`/`export` request types are schema-valid but unfulfilled.
+- **Dry-run before destroy**: `POST .../preview` never mutates data and reports the exact planned effect (or blocker) before `POST .../execute` is ever called; execute independently re-validates from scratch and does not trust a prior preview result — this is what makes the irreversibility of execution a deliberate, informed act rather than a one-shot risk.
+- **Sole-admin blocker**: erasure is refused (409, not a silent no-op) if the target is the only active `org_admin` of any organization, surfaced by preview before any destructive action and re-checked independently by execute.
+- **Auth identity removal**: a completed erasure deletes the linked Supabase Auth identity (`auth.users`), not just the `public.users` row — verified empirically against the local Auth schema's own internal cascade (`identities`/`sessions`/`refresh_tokens`/etc., all `ON DELETE CASCADE`) and proven by a real post-erasure login attempt failing in the test suite. A person cannot authenticate after a completed erasure.
+- **Permissions**: `consent:record`, `data-subject-requests:create/read/execute` are `org_admin`-only in M1.6 — no agency-scoped role (`agency_owner`/`agency_admin`) has any access to compliance data yet; agency-facing compliance workflows are explicitly deferred until scoped separately.
+- **SLA-breach detection**: `data_subject_request_breaches` (a view: `due_at < now() and status <> 'completed'`) is queryable and tested, but has no notification channel (email/Slack/Sentry) wired to it — that lands with the observability/alerting milestone, not here.
+
 ## 6. Audit Logs
 
 - `audit_logs` is append-only — no `updated_at`/`deleted_at`, entries are never mutated after creation, satisfying both security-audit and GDPR accountability requirements simultaneously.
 - Logged actions include: authentication events (login, MFA challenge, API key creation/revocation), permission changes (role/membership changes), all `data_subject_requests` lifecycle transitions, agency roll-up view access, **agent approval-gate resolutions (a proposed action confirmed or discarded, and by whom)**, and any write action tagged as sensitive (deal amount changes, proposal sends, consent withdrawals).
 - Each entry captures actor, action, resource type/id, before/after state (jsonb), IP address, and timestamp — sufficient to reconstruct "who did what, when, and what changed" without needing to correlate across multiple systems.
 - Audit logs are themselves tenant-scoped (`organization_id`) for tenant-visible history (e.g., an org admin reviewing their own team's activity) but also queryable at the platform level for security investigations, via a separate, explicitly-audited platform-operator access path.
+- **M1.6 implementation**: append-only is enforced at the grant level, not just by omitting an `UPDATE`/`DELETE` policy — `authenticated` has no `UPDATE`/`DELETE` grant on `audit_logs` at all, which fails closed with a permission error rather than relying on RLS policy coverage alone (the same two-layer discipline established in M1.2, `docs/03-Database-Architecture.md` §5). Actions actually logged as of M1.6: `consent.recorded`, `data_subject_request.created`, `data_subject_request.executed` — each written inside the same database transaction as the action it describes, never as a separate follow-up write. Authentication events (login) are **not yet wired** — doing so from `packages/auth` would create a package dependency cycle (`compliance` depends on `auth`, not the reverse, per `02-Software-Architecture.md` §4), so it's deferred rather than solved with an architecturally awkward workaround. The platform-level query path named above still does not exist as of M1.6.
 
 ## 7. Secrets Management
 

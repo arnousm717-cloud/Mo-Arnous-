@@ -61,17 +61,10 @@ export async function handleGetOrganizations(userId: string | null): Promise<Nex
   return NextResponse.json({ organizations: [] satisfies OrganizationSummary[] });
 }
 
-export function isSameOrigin(originHeader: string | null, requestUrl: string): boolean {
-  // Cheap defense-in-depth alongside the @supabase/ssr session cookie's own
-  // sameSite: "lax" default (verified in node_modules — Lax already blocks
-  // the cookie from being sent on a cross-site POST, which is the actual
-  // CSRF-relevant protection here). A present-but-mismatched Origin header
-  // is rejected; a missing one is tolerated rather than rejected, since some
-  // legitimate same-origin requests omit it — this is additive hardening on
-  // top of the cookie behavior, not the sole defense.
-  if (!originHeader) return true;
-  return originHeader === new URL(requestUrl).origin;
-}
+// Re-exported for backward compatibility with existing imports/tests — the
+// implementation itself now lives in _shared/same-origin.ts (M1.6), shared
+// across every mutating v1 route instead of duplicated per route.
+export { isSameOrigin } from "../_shared/same-origin";
 
 interface CreateOrganizationBody {
   name?: unknown;

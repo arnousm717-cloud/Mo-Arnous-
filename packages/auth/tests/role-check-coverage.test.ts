@@ -32,7 +32,12 @@ const repoRoot = (() => {
   return dir;
 })();
 
-const SCAN_ROOTS = [join(repoRoot, "apps", "web", "app"), join(repoRoot, "packages", "auth", "src"), join(repoRoot, "packages", "tenancy", "src")];
+const SCAN_ROOTS = [
+  join(repoRoot, "apps", "web", "app"),
+  join(repoRoot, "packages", "auth", "src"),
+  join(repoRoot, "packages", "tenancy", "src"),
+  join(repoRoot, "packages", "compliance", "src"),
+];
 
 const ALLOWED_FILE = join(repoRoot, "packages", "auth", "src", "permissions.ts");
 

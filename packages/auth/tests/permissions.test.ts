@@ -15,6 +15,10 @@ const PERMISSIONS: PermissionKey[] = [
   "agencies:manage-branding",
   "agencies:manage-billing",
   "agencies:manage-domains",
+  "consent:record",
+  "data-subject-requests:create",
+  "data-subject-requests:read",
+  "data-subject-requests:execute",
 ];
 
 /**
@@ -41,6 +45,10 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "agencies:manage-branding": true,
     "agencies:manage-billing": true,
     "agencies:manage-domains": true,
+    "consent:record": false,
+    "data-subject-requests:create": false,
+    "data-subject-requests:read": false,
+    "data-subject-requests:execute": false,
   },
   agency_admin: {
     "organizations:read": false,
@@ -53,6 +61,10 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "agencies:manage-branding": true,
     "agencies:manage-billing": false, // the explicit, approved denial
     "agencies:manage-domains": true,
+    "consent:record": false,
+    "data-subject-requests:create": false,
+    "data-subject-requests:read": false,
+    "data-subject-requests:execute": false,
   },
   org_admin: {
     "organizations:read": true,
@@ -65,6 +77,11 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "agencies:manage-branding": false,
     "agencies:manage-billing": false,
     "agencies:manage-domains": false,
+    // M1.6, Decision F: org_admin-only, no other role gets these.
+    "consent:record": true,
+    "data-subject-requests:create": true,
+    "data-subject-requests:read": true,
+    "data-subject-requests:execute": true,
   },
   org_member: {
     "organizations:read": true,
@@ -77,6 +94,10 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "agencies:manage-branding": false,
     "agencies:manage-billing": false,
     "agencies:manage-domains": false,
+    "consent:record": false,
+    "data-subject-requests:create": false,
+    "data-subject-requests:read": false,
+    "data-subject-requests:execute": false,
   },
   org_viewer: {
     "organizations:read": true,
@@ -89,6 +110,10 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "agencies:manage-branding": false,
     "agencies:manage-billing": false,
     "agencies:manage-domains": false,
+    "consent:record": false,
+    "data-subject-requests:create": false,
+    "data-subject-requests:read": false,
+    "data-subject-requests:execute": false,
   },
   portal_customer: {
     "organizations:read": false,
@@ -101,6 +126,10 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "agencies:manage-branding": false,
     "agencies:manage-billing": false,
     "agencies:manage-domains": false,
+    "consent:record": false,
+    "data-subject-requests:create": false,
+    "data-subject-requests:read": false,
+    "data-subject-requests:execute": false,
   },
 };
 
@@ -127,6 +156,37 @@ describe("can(): exhaustive permission matrix (every role x every permission)", 
       });
     }
   }
+});
+
+describe("can(): M1.6 Decision F — DSR/consent permissions are org_admin-only", () => {
+  it("org_admin IS granted all three DSR permissions plus consent:record", () => {
+    const actor = actorFor("org_admin");
+    expect(can(actor, "consent:record")).toBe(true);
+    expect(can(actor, "data-subject-requests:create")).toBe(true);
+    expect(can(actor, "data-subject-requests:read")).toBe(true);
+    expect(can(actor, "data-subject-requests:execute")).toBe(true);
+  });
+
+  it("agency_owner and agency_admin are denied every DSR/consent permission, even though they have broad agency-wide grants elsewhere", () => {
+    for (const role of ["agency_owner", "agency_admin"] as const) {
+      const actor = actorFor(role);
+      expect(can(actor, "consent:record")).toBe(false);
+      expect(can(actor, "data-subject-requests:create")).toBe(false);
+      expect(can(actor, "data-subject-requests:read")).toBe(false);
+      expect(can(actor, "data-subject-requests:execute")).toBe(false);
+    }
+  });
+
+  it("every non-org_admin role is denied every DSR/consent permission", () => {
+    for (const role of ROLES) {
+      if (role === "org_admin") continue;
+      const actor = actorFor(role);
+      expect(can(actor, "consent:record")).toBe(false);
+      expect(can(actor, "data-subject-requests:create")).toBe(false);
+      expect(can(actor, "data-subject-requests:read")).toBe(false);
+      expect(can(actor, "data-subject-requests:execute")).toBe(false);
+    }
+  });
 });
 
 describe("can(): the specific approved billing decision", () => {

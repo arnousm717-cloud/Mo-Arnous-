@@ -152,7 +152,7 @@ Representative events: `contact.created`, `deal.stage_changed`, `visitor.identif
 - ADR-001: Modular monolith over microservices
 - ADR-002: n8n as the provider-facing automation boundary, mediated exclusively through the app's own API (no direct database access)
 - ADR-003: Shared-schema RLS over schema/database-per-tenant
-- ADR-004: Outbox + polling over a dedicated message broker
-- ADR-005: Queued/async agent execution over inline serverless request/response for multi-tool-call runs
+- ADR-004: Direct Postgres data access over PostgREST for internal app queries — PostgREST has no visibility into the `app.current_org` session variable the tenant-context mechanism depends on (`docs/adr/ADR-004-direct-postgres-data-access.md`)
+- ADR-005: Agency-level membership model — extending `memberships` with nullable `organization_id`/`agency_id` and an exactly-one-scope CHECK constraint, over a fake "home organization" or a parallel `agency_memberships` table (`docs/adr/ADR-005-agency-level-membership-model.md`)
 - ADR-006: pgvector on the primary Postgres instance over a dedicated vector database, with a named revisit trigger
 - ADR-007: Event schema versioning policy for the outbox

@@ -31,7 +31,11 @@ export type PermissionKey =
   | "agencies:read"
   | "agencies:manage-branding"
   | "agencies:manage-billing"
-  | "agencies:manage-domains";
+  | "agencies:manage-domains"
+  | "consent:record"
+  | "data-subject-requests:create"
+  | "data-subject-requests:read"
+  | "data-subject-requests:execute";
 
 export interface Actor {
   userId: string;
@@ -92,6 +96,13 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "organizations:manage-billing": true,
     "organizations:manage-users": true,
     "organizations:manage-settings": true,
+    // M1.6, Decision F: org_admin-only. agency_owner/agency_admin get none
+    // of these three — agency-facing compliance workflows are explicitly
+    // deferred until scoped separately.
+    "consent:record": true,
+    "data-subject-requests:create": true,
+    "data-subject-requests:read": true,
+    "data-subject-requests:execute": true,
   },
   org_member: {
     "organizations:read": true,
