@@ -37,14 +37,6 @@
 
 Standard verbs apply per resource: `GET` (list/detail), `POST` (create), `PATCH` (partial update), `DELETE`. No resource uses `PUT` — partial updates only, to avoid accidental full-object overwrites. **`DELETE` on an ordinary CRM resource (`contacts`, `companies`, `deals`, `proposals`) is the recoverable soft-delete described in `03-Database-Architecture.md`'s deletion model — it does not, by itself, satisfy a GDPR erasure obligation.** That is only ever fulfilled via the dedicated `POST /api/v1/data-subject-requests/{id}/preview` then `POST .../execute` pair (§2.2), not `DELETE` on the resource — a deliberate deviation from this section's own verb convention, made explicitly in M1.6 (Decision D) because a single `DELETE` call reads as symmetric with every other resource's recoverable soft-delete, which an irreversible cross-cascade hard-delete is not. This distinction is stated explicitly here because conflating the two is one of the most common real-world compliance mistakes in CRM-shaped APIs.
 
-### 2.2 `/api/v1/consent`, `/api/v1/data-subject-requests` — implemented contract (M1.6)
-
-- **`POST /api/v1/consent`** — session auth, `org_admin` only (`08-Security.md` §3.1). Body: `subjectType` (`contact`/`visitor`/`portal_user`), `subjectId`, `consentType` (`marketing_email`/`cookie_tracking`/`data_processing`), `status` (`granted`/`withdrawn`), optional `source`. `201` with `{ consent: { id, status, recordedAt } }`. `organization_id` comes exclusively from the caller's server-resolved context.
-- **`POST /api/v1/data-subject-requests`** — session auth, `org_admin` only. Body: `subjectType` (`contact`/`visitor`/`portal_user`/`user`), `subjectId`, `requestType` (`access`/`export`/`delete`). `201` with `{ dataSubjectRequest }` on success. `400` if `requestType` isn't `delete` — `access`/`export` are schema-valid but have no fulfillment logic in M1.6.
-- **`GET /api/v1/data-subject-requests/{id}`** — session auth, `org_admin` only, scoped to the caller's own organization via RLS (a cross-org id returns `404`, not `403`, to avoid confirming the row's existence to a caller who can't see it).
-- **`POST /api/v1/data-subject-requests/{id}/preview`** — dry-run, never mutates. `200` with `{ preview: { canProceed, blockerReason, targetUserId, membershipCount, affectedOrganizationIds } }`. A `false` `canProceed` (e.g. the target is the sole `org_admin` of an organization) is still a `200` — it's a successful preview reporting a blocker, not a failed request.
-- **`POST /api/v1/data-subject-requests/{id}/execute`** — irreversible. Independently re-validates authorization and the sole-`org_admin` blocker; never trusts a prior `preview` call. `200` with `{ result: { targetUserId, membershipsRemoved, completedAt } }` on success; `409` if blocked or already completed, `400` if the request's `subjectType`/`requestType` combination has no fulfillment logic.
-
 ### 2.1 `/api/v1/organizations` — implemented contract (M1.4)
 
 The first resource actually built beyond the health check, so its real contract is recorded here rather than left to match the general table above by assumption.
@@ -62,6 +54,23 @@ The first resource actually built beyond the health check, so its real contract 
   - Slug collisions are handled transparently server-side (the same generate-and-retry-on-conflict pattern as individual-user org signup) — a client never sees a slug conflict; two organizations may share the same `name`, they just get distinct auto-generated slugs.
   - `500` (generic, no internal detail) only if organization creation fails for a reason other than the above — e.g. the slug-retry budget is exhausted, astronomically unlikely in practice.
   - A same-origin check on the `Origin` header (when present) returns `403` for a cross-origin `POST`, as defense-in-depth alongside the session cookie's own `sameSite: "lax"` default.
+
+### 2.2 `/api/v1/consent`, `/api/v1/data-subject-requests` — implemented contract (M1.6)
+
+- **`POST /api/v1/consent`** — session auth, `org_admin` only (`08-Security.md` §3.1). Body: `subjectType` (`contact`/`visitor`/`portal_user`), `subjectId`, `consentType` (`marketing_email`/`cookie_tracking`/`data_processing`), `status` (`granted`/`withdrawn`), optional `source`. `201` with `{ consent: { id, status, recordedAt } }`. `organization_id` comes exclusively from the caller's server-resolved context.
+- **`POST /api/v1/data-subject-requests`** — session auth, `org_admin` only. Body: `subjectType` (`contact`/`visitor`/`portal_user`/`user`), `subjectId`, `requestType` (`access`/`export`/`delete`). `201` with `{ dataSubjectRequest }` on success. `400` if `requestType` isn't `delete` — `access`/`export` are schema-valid but have no fulfillment logic in M1.6.
+- **`GET /api/v1/data-subject-requests/{id}`** — session auth, `org_admin` only, scoped to the caller's own organization via RLS (a cross-org id returns `404`, not `403`, to avoid confirming the row's existence to a caller who can't see it).
+- **`POST /api/v1/data-subject-requests/{id}/preview`** — dry-run, never mutates. `200` with `{ preview: { canProceed, blockerReason, targetUserId, membershipCount, affectedOrganizationIds } }`. A `false` `canProceed` (e.g. the target is the sole `org_admin` of an organization) is still a `200` — it's a successful preview reporting a blocker, not a failed request.
+- **`POST /api/v1/data-subject-requests/{id}/execute`** — irreversible. Independently re-validates authorization and the sole-`org_admin` blocker; never trusts a prior `preview` call. `200` with `{ result: { targetUserId, membershipsRemoved, completedAt } }` on success; `409` if blocked or already completed, `400` if the request's `subjectType`/`requestType` combination has no fulfillment logic.
+
+### 2.3 `/api/v1/api-keys` — scope clarification (M1.7)
+
+The resource-map row for API Keys above (§2) describes the **eventual, Phase 7 self-service shape** ("Issue, list, revoke scoped keys for the calling organization"), not what exists today. As of M1.7:
+
+- There is **no `/api/v1/api-keys` route at all** — no HTTP surface, tenant-facing or otherwise.
+- `api_keys` (`03-Database-Architecture.md` §2.1) is a real table, and a key can be issued, but only via a local, human-run script (`packages/database/scripts/issue-api-key.mjs`) using `DATABASE_URL` directly — never reachable from `apps/web` (verified by an automated coverage test, `api-key-issuance-isolation.test.ts`).
+- Nothing in the request-handling pipeline validates a `Bearer` token yet — `resolveRequestContext()` only resolves session auth. API-key-based request authentication is deferred to Phase 3, when n8n becomes the first real caller (`06-n8n-Workflow-Architecture.md` §1), rather than built ahead of any actual consumer.
+- This section exists so the gap between the resource-map's description and reality is explicit, not discovered by surprise — the same treatment M1.6 gave the `data_subject_requests` verb correction (§2.2 above).
 
 ## 3. Authentication
 

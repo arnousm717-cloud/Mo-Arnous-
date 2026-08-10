@@ -106,6 +106,8 @@ Not every interaction needs to be synchronous request/response. Domain events dr
 
 Representative events: `contact.created`, `deal.stage_changed`, `visitor.identified`, `lead_score.recalculated`, `consent.withdrawn`, `data_subject_request.created`, `proposal.sent`, `agent_run.completed`.
 
+**M1.7 implementation note**: the `(event_id, consumer)` idempotency this section already prescribed is realized as a real table, `event_deliveries` (`03-Database-Architecture.md` §2.10) — `events.processed_at` alone cannot express it once more than one consumer exists, since it's a single global flag, not a per-consumer one. Dispatch in M1.7 is an **in-process TS function** (`packages/database`'s `dispatchPendingEvents()`), called directly rather than by a scheduled Supabase Edge Function — the Edge Function/cron wiring described above is not yet built, and n8n fan-out is still Phase 3, per `12-Implementation-Milestones.md`'s M1.7 scope. At-least-once delivery is real, not exactly-once: a crash between a consumer's side effect succeeding and its `event_deliveries` row committing causes a redelivery on the next dispatch call, re-invoking that consumer — `event_deliveries` prevents double-*counting* once a delivery is recorded, it cannot make an arbitrary external side effect exactly-once across that specific crash window. Any consumer with a non-transactional external effect (an API call, an email send) must be idempotent on its own terms.
+
 ## 6. Technology Decisions
 
 | Decision | Choice | Rationale |

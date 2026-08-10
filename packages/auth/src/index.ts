@@ -20,6 +20,16 @@ export {
   type PermissionKey,
   type ResourceContext,
 } from "./permissions";
+export {
+  generateApiKey,
+  hashApiKey,
+  verifyApiKey,
+  isApiKeyValid,
+  API_KEY_PREFIX_LIVE,
+  API_KEY_PREFIX_TEST,
+  type GeneratedApiKey,
+  type ApiKeyRecord,
+} from "./api-keys";
 // refreshSession and exchangeAuthCode are deliberately NOT re-exported here
 // — they must be imported from "@ai-revenue-os/auth/middleware" directly.
 // This barrel pulls in resolveRequestContext, which depends on pg (Node-only
