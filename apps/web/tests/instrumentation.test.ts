@@ -2,12 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const captureRequestError = vi.fn();
 const flush = vi.fn();
-const lastEventId = vi.fn();
 
 vi.mock("@sentry/nextjs", () => ({
   captureRequestError: (...args: unknown[]) => captureRequestError(...args),
   flush: (...args: unknown[]) => flush(...args),
-  lastEventId: (...args: unknown[]) => lastEventId(...args),
 }));
 
 const errorContext = { routerKind: "App Router", routePath: "/api/v1/health", routeType: "route" } as const;
@@ -18,8 +16,6 @@ describe("instrumentation.onRequestError", () => {
     captureRequestError.mockReset();
     flush.mockReset();
     flush.mockResolvedValue(true);
-    lastEventId.mockReset();
-    lastEventId.mockReturnValue("test-event-id-123");
   });
 
   afterEach(() => {
@@ -44,6 +40,9 @@ describe("instrumentation.onRequestError", () => {
   // Runtime) — the event gets captured but never delivered before the
   // function freezes. Awaiting flush() explicitly here is the fix; this
   // test guards against that await ever being silently dropped again.
+  // Verified end-to-end against real Sentry ingest on a Preview deployment
+  // (M1.8 closeout) — the captured error now reaches Sentry as a real
+  // Issue, redacted as designed.
   it("awaits Sentry.flush() with a bounded timeout after capturing the error", async () => {
     const { onRequestError } = await import("../instrumentation");
 
