@@ -29,6 +29,11 @@ export const beforeSendTransaction: BeforeSendTransaction = (event) => redactDee
 
 export const sharedSentryInit: InitOptions = {
   dsn: process.env.SENTRY_DSN,
+  // Vercel's own per-deployment signal (preview/production/development) —
+  // without this, the SDK falls back to a hardcoded "production" tag on
+  // every event regardless of which Vercel environment actually sent it,
+  // which is misleading and can hide events under an unexpected filter.
+  environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV,
   sendDefaultPii: false,
   beforeSend,
   beforeSendTransaction,
