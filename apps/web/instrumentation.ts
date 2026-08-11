@@ -27,13 +27,32 @@ export async function register(): Promise<void> {
  * side-channel, not part of the request path. Even so, a failure here must
  * never propagate, regardless of how Next.js's own runtime would otherwise
  * treat a throw from an instrumentation hook.
+ *
+ * The explicit `flush()` below is required, not optional, on a Vercel
+ * Node.js Serverless Function (as opposed to Vercel Edge Runtime). Root
+ * cause (confirmed by reading @sentry/core's own source, not assumed):
+ * `@sentry/nextjs`'s automatic route-handler wrapping schedules its
+ * post-response flush via `vercelWaitUntil()`
+ * (@sentry/core/build/cjs/utils/vercelWaitUntil.js), which only calls
+ * `ctx.waitUntil(...)` when `typeof EdgeRuntime === "string"` — true for
+ * Vercel Edge Runtime, always false for a plain Node.js Serverless
+ * Function. For every route in this app (none opt into `export const
+ * runtime = "edge"`), that check silently no-ops: the automatic capture
+ * still marks and queues the event (hence "Captured error event" in the
+ * logs), but nothing keeps the function alive long enough for the queued
+ * envelope to actually finish sending before Vercel freezes the
+ * invocation — the event is captured but never delivered. Awaiting
+ * `flush()` here, inside a hook Next.js itself awaits before the request
+ * lifecycle ends, blocks exactly long enough for delivery regardless of
+ * that upstream gap.
  */
 export const onRequestError = async (
   ...args: Parameters<typeof import("@sentry/nextjs").captureRequestError>
 ): Promise<void> => {
   try {
-    const { captureRequestError } = await import("@sentry/nextjs");
+    const { captureRequestError, flush } = await import("@sentry/nextjs");
     captureRequestError(...args);
+    await flush(2000);
   } catch {
     // Deliberately swallowed — see the fail-open note above.
   }
