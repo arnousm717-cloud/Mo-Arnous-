@@ -109,12 +109,32 @@ Sentry.init({
     const realTransport = Sentry.makeNodeTransport(options);
     return {
       send: async (envelope: Parameters<typeof realTransport.send>[0]) => {
+        // A 200 from ingest only proves the envelope was *accepted for
+        // processing* — not that any particular item inside it was stored.
+        // Sentry sends multiple envelope types per request (an error-event
+        // envelope, a session/crash-status envelope, etc.) — logging the
+        // envelope's own header event_id and its items' types is what lets
+        // us prove WHICH envelope a given 200 actually belongs to, rather
+        // than assuming "some 200 happened" means "the error event landed."
+        const [envelopeHeader, envelopeItems] = envelope;
         console.log(
-          JSON.stringify({ diagnostic: "sentry-transport-send-attempt", url: redactTransportUrl(options.url) }),
+          JSON.stringify({
+            diagnostic: "sentry-transport-send-attempt",
+            url: redactTransportUrl(options.url),
+            envelopeEventId: "event_id" in envelopeHeader ? envelopeHeader.event_id : null,
+            envelopeItemTypes: envelopeItems.map((item) => item[0].type),
+          }),
         );
         try {
           const result = await realTransport.send(envelope);
-          console.log(JSON.stringify({ diagnostic: "sentry-transport-send-result", result }));
+          console.log(
+            JSON.stringify({
+              diagnostic: "sentry-transport-send-result",
+              envelopeEventId: "event_id" in envelopeHeader ? envelopeHeader.event_id : null,
+              envelopeItemTypes: envelopeItems.map((item) => item[0].type),
+              result,
+            }),
+          );
           return result;
         } catch (error) {
           console.log(
