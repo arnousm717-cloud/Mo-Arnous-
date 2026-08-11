@@ -1,3 +1,5 @@
+import * as http from "node:http";
+import * as https from "node:https";
 import * as Sentry from "@sentry/nextjs";
 import { sharedSentryInit } from "./sentry.shared-config";
 
@@ -53,6 +55,45 @@ console.log(
   }),
 );
 
+// Wraps the native http/https module the real transport would otherwise
+// use directly (see @sentry/node-core's own createRequestExecutor, which
+// explicitly drains-and-discards the response body via empty `res.on(...)`
+// handlers — it never reads it). Adding our own 'data'/'end' listener
+// alongside is safe: Node broadcasts stream events to every registered
+// listener, so this cannot interfere with the real transport's own
+// (no-op) body handling. Only logs a truncated snippet, and only on a
+// non-2xx response — Sentry's own error reason text, nothing of ours.
+function createBodyCapturingHttpModule(
+  targetUrl: string,
+): NonNullable<Parameters<typeof Sentry.makeNodeTransport>[0]["httpModule"]> {
+  const native = new URL(targetUrl).protocol === "https:" ? https : http;
+  return {
+    request: (requestOptions, callback) => {
+      return native.request(requestOptions, (res) => {
+        if (res.statusCode && res.statusCode >= 300) {
+          res.setEncoding("utf8");
+          let body = "";
+          res.on("data", (chunk: string) => {
+            if (body.length < 500) body += chunk;
+          });
+          res.on("end", () => {
+            console.log(
+              JSON.stringify({
+                diagnostic: "sentry-ingest-error-response-body",
+                statusCode: res.statusCode,
+                bodySnippet: body.slice(0, 500),
+              }),
+            );
+          });
+        }
+        if (callback) {
+          callback(res as unknown as Parameters<NonNullable<typeof callback>>[0]);
+        }
+      });
+    },
+  };
+}
+
 Sentry.init({
   ...sharedSentryInit,
   debug: true,
@@ -63,7 +104,8 @@ Sentry.init({
   // 4xx/429 means rejected/rate-limited, a thrown error means the request
   // never completed), which the SDK's own "No outcomes to send" debug line
   // does not surface on its own.
-  transport: (options: Parameters<typeof Sentry.makeNodeTransport>[0]) => {
+  transport: (optionsIn: Parameters<typeof Sentry.makeNodeTransport>[0]) => {
+    const options = { ...optionsIn, httpModule: createBodyCapturingHttpModule(optionsIn.url) };
     const realTransport = Sentry.makeNodeTransport(options);
     return {
       send: async (envelope: Parameters<typeof realTransport.send>[0]) => {
