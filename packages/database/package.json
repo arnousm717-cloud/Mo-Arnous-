@@ -20,7 +20,7 @@
   "devDependencies": {
     "@ai-revenue-os/config": "workspace:*",
     "@types/node": "^22.10.0",
-    "@types/pg": "^8.11.0",
+    "@types/pg": "^8.21.0",
     "supabase": "^2.109.1",
     "typescript": "^5.7.0",
     "vitest": "^3.2.7"
