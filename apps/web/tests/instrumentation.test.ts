@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const captureRequestError = vi.fn();
 const flush = vi.fn();
+const lastEventId = vi.fn();
 
 vi.mock("@sentry/nextjs", () => ({
   captureRequestError: (...args: unknown[]) => captureRequestError(...args),
   flush: (...args: unknown[]) => flush(...args),
+  lastEventId: (...args: unknown[]) => lastEventId(...args),
 }));
 
 const errorContext = { routerKind: "App Router", routePath: "/api/v1/health", routeType: "route" } as const;
@@ -16,6 +18,8 @@ describe("instrumentation.onRequestError", () => {
     captureRequestError.mockReset();
     flush.mockReset();
     flush.mockResolvedValue(true);
+    lastEventId.mockReset();
+    lastEventId.mockReturnValue("test-event-id-123");
   });
 
   afterEach(() => {

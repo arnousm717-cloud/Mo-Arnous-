@@ -50,9 +50,21 @@ export const onRequestError = async (
   ...args: Parameters<typeof import("@sentry/nextjs").captureRequestError>
 ): Promise<void> => {
   try {
-    const { captureRequestError, flush } = await import("@sentry/nextjs");
+    const { captureRequestError, flush, lastEventId } = await import("@sentry/nextjs");
     captureRequestError(...args);
-    await flush(2000);
+    // TEMPORARY (M1.8 staging diagnosis): logs flush()'s own return value
+    // (true = sent-or-emptied-within-timeout, false = timed out) and the
+    // event id Sentry itself assigned — proof this hook actually ran and
+    // what it observed, independent of whatever the automatic
+    // route-handler capture already did.
+    const flushed = await flush(2000);
+    console.log(
+      JSON.stringify({
+        diagnostic: "onRequestError-flush-result",
+        flushed,
+        lastEventId: lastEventId(),
+      }),
+    );
   } catch {
     // Deliberately swallowed — see the fail-open note above.
   }
