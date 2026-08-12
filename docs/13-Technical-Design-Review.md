@@ -397,9 +397,26 @@ and requires no credential of any kind — wired into `.github/workflows/ci.yml`
 as the very first `run` step (after Node is set up, before `pnpm install`),
 so a destructive migration fails CI before any other step runs.
 
-**Still open for M1.9**: ADR-002 and the DR runbook. The CI migration-safety
-gate and the destructive-migration-blocking test are both done. M1.9 is not
-closed.
+**Done — ADR-002.** `docs/adr/ADR-002-n8n-provider-boundary.md` records the
+decision that n8n has no direct Postgres access and must never receive
+`DATABASE_URL` or an equivalent privileged credential — it reads/writes
+tenant data exclusively through the app's own `/api/v1/*` API, using the
+same `api_keys`/`service`-scope credential primitive any external
+integrator uses. Precise about implementation status: the credential
+schema and its issuance/isolation foundation are implemented (M1.7); that
+n8n specifically will use this boundary is a documented architectural
+decision, not yet exercised by real traffic; the actual n8n workflows, the
+`/api/v1/api-keys` route, and Bearer-token request authentication remain
+Phase 3 work. A pre-existing inconsistency was found and corrected as part
+of this ADR: `docs/adr/ADR-004-direct-postgres-data-access.md` previously
+stated that an external integrator or n8n workflow uses Supabase's
+PostgREST — corrected to state they use the app's own `/api/v1/*` API
+instead (ADR-002), matching `04-API-Architecture.md` §8, which ADR-004
+itself already cited. The two ADRs no longer contradict each other.
+
+**Still open for M1.9**: the bad-migration-to-production DR runbook. The CI
+migration-safety gate, the destructive-migration-blocking test, and ADR-002
+are all done. M1.9 is not closed.
 
 ---
 
