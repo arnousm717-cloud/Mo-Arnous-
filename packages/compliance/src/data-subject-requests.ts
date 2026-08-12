@@ -212,6 +212,88 @@ export async function executeUserErasure(
   });
 }
 
+export interface ContactErasurePreview {
+  canProceed: boolean;
+  blockerReason: string | null;
+  targetContactId: string | null;
+}
+
+interface ContactErasurePreviewRow {
+  can_proceed: boolean;
+  blocker_reason: string | null;
+  target_contact_id: string | null;
+}
+
+/**
+ * Dry-run for a subject_type='contact' DSR (Milestone 2.1C, mirroring
+ * previewUserErasure above). Delegates entirely to
+ * preview_contact_erasure() (SECURITY DEFINER), which never mutates
+ * contacts, data_subject_requests, or audit_logs, and which binds the
+ * DSR's own organization_id to the target contact's organization_id
+ * server-side — never trusting a caller-supplied value. A true
+ * canProceed here is advisory only; executeContactErasure below
+ * re-validates from scratch and does not trust this result.
+ */
+export async function previewContactErasure(
+  ctx: { userId: string },
+  dsrId: string,
+): Promise<ContactErasurePreview> {
+  return withTenantContext(ctx, async (client) => {
+    const r = await client.query<ContactErasurePreviewRow>("select * from public.preview_contact_erasure($1, $2)", [
+      dsrId,
+      ctx.userId,
+    ]);
+    const row = r.rows[0];
+    if (!row) {
+      throw new Error("preview_contact_erasure returned no row — this should be unreachable.");
+    }
+    return {
+      canProceed: row.can_proceed,
+      blockerReason: row.blocker_reason,
+      targetContactId: row.target_contact_id,
+    };
+  });
+}
+
+export interface ContactErasureResult {
+  targetContactId: string;
+  completedAt: string;
+}
+
+interface ContactErasureResultRow {
+  target_contact_id: string;
+  completed_at: string;
+}
+
+/**
+ * Irreversible. Delegates entirely to execute_contact_erasure() (SECURITY
+ * DEFINER), which independently re-validates caller authorization and the
+ * DSR-organization-to-contact-organization binding, performs the hard
+ * delete, and writes the audit entry — all inside that function's own
+ * single transaction. This wrapper adds no logic of its own precisely so
+ * there is no app-layer path that could diverge from what the database
+ * actually enforces (mirroring executeUserErasure above).
+ */
+export async function executeContactErasure(
+  ctx: { userId: string },
+  dsrId: string,
+): Promise<ContactErasureResult> {
+  return withTenantContext(ctx, async (client) => {
+    const r = await client.query<ContactErasureResultRow>("select * from public.execute_contact_erasure($1, $2)", [
+      dsrId,
+      ctx.userId,
+    ]);
+    const row = r.rows[0];
+    if (!row) {
+      throw new Error("execute_contact_erasure returned no row — this should be unreachable.");
+    }
+    return {
+      targetContactId: row.target_contact_id,
+      completedAt: row.completed_at,
+    };
+  });
+}
+
 /**
  * Reads the data_subject_request_breaches view (M1.6 Decision E) —
  * overdue, not-yet-completed requests for the caller's own organization.

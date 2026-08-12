@@ -308,7 +308,10 @@ describe("data_retention_policies: read-only, platform defaults visible", () => 
         return r.rows;
       },
     );
-    expect(rows.map((r) => r.data_type)).toEqual(["audit_logs", "consent_records", "data_subject_requests"]);
+    // "contacts" joined the platform-default set in Milestone 2.1C
+    // (docs/13-Technical-Design-Review.md "Milestone 2.1") — the first
+    // CRM-table retention policy, alongside the three M1.6 originals.
+    expect(rows.map((r) => r.data_type)).toEqual(["audit_logs", "consent_records", "contacts", "data_subject_requests"]);
   });
 });
 

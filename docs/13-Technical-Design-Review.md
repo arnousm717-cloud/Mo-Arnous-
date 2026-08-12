@@ -507,6 +507,89 @@ This section records the approved design decisions from the 2.1 planning pass, s
 
 **Sequencing**: schema (companies + contacts + RLS + grants) → GDPR retention/erasure wiring for `contacts` → `packages/crm` domain logic → RBAC keys → API routes → UI (`EntityTable`, separate, real work) → adversarial/final verification, matching every prior milestone's plan-then-verify discipline.
 
+### 2.1B — Done (schema, RLS, grants)
+
+`companies`/`contacts` shipped, tested (462 database tests including 42
+schema/RLS-specific), and live-verified on staging
+(`damunjcpwxthdjaonatb`) via read-only catalog inspection. Not repeated
+here — see the 2.1B closeout evidence already on record from this
+session.
+
+### 2.1C — Done (Contacts GDPR/DSR integration)
+
+`packages/database/supabase/migrations/20260812130000_create_contact_erasure_functions.sql`
+adds the platform-default `contacts` retention row (2555 days — the
+current configurable platform default, not a claim that GDPR universally
+requires seven years) and mirrors M1.6's `preview_user_erasure`/
+`execute_user_erasure` pair exactly: `_validate_contact_erasure`
+(private, no `EXECUTE` grant), `preview_contact_erasure(dsr_id,
+caller_user_id)`, `execute_contact_erasure(dsr_id, caller_user_id)`, both
+`SECURITY DEFINER`, `set search_path = public`.
+
+**Tenant-binding is the one place this pattern is stricter than the user
+one, by design**: a contact has no memberships/roles of its own, so
+authorization isn't "caller shares any organization with the target" —
+`_validate_contact_erasure` takes an explicit `organization_id`
+parameter, always resolved server-side from the `data_subject_requests`
+row (never caller-supplied), and both `preview`/`execute` independently
+re-derive and cross-check that the target contact's own
+`organization_id` matches the DSR's `organization_id` before checking
+the caller's membership in that exact organization. An org_admin of Org
+A cannot use that authority against Org B's contact, even when they
+additionally hold a non-admin membership in Org B — proven by a
+dedicated adversarial test, not just asserted.
+
+A missing contact and a contact belonging to a different organization
+than the DSR produce an **identical** preview result (`can_proceed:
+false`, same generic `blocker_reason`, `target_contact_id: null`) —
+verified by a test asserting the two results are deeply equal — so
+preview can never be used to probe whether another organization's
+contact exists.
+
+`packages/compliance/src/data-subject-requests.ts` gained
+`previewContactErasure`/`executeContactErasure`, thin wrappers adding no
+logic of their own, exported from the package barrel — mirroring
+`previewUserErasure`/`executeUserErasure` exactly. No HTTP route change
+(deliberately out of this step's scope — the existing
+`/api/v1/data-subject-requests/{id}/execute`/`preview` routes remain
+hardcoded to the user-erasure functions; dispatching by `subject_type`
+is separate, later work).
+
+**Audit entry contains no raw contact PII** — `before`/`after` hold only
+`subject_type`, a `had_company_link` boolean, and completion metadata;
+a dedicated test serializes the full audit payload and asserts it
+contains neither the test contact's name nor its email. **Consent
+history is preserved, not deleted or anonymized** — `consent_records`
+rows referencing an erased contact are left untouched by design (a
+non-resolving `subject_id` after erasure is the approved, intended
+state), matching the same "evidence, not a live reference" treatment
+`audit_logs` already receives for erased users.
+
+**Transactional safety verified, not assumed**: a chaos-style test
+(matching `signup-flow.test.ts`'s established pattern — a temporary
+trigger forcing the `audit_logs` insert to fail) proves the contact
+hard-delete and the `data_subject_requests` status update both roll
+back completely when the audit write fails, leaving zero partial-erasure
+state.
+
+`packages/compliance/tests/contact-erasure.test.ts` (17 tests) covers
+retention, preview (success, non-mutation, no audit write, soft-deleted
+contact still eligible, no PII, cross-org indistinguishability),
+execute (success, physically gone not `deleted_at`, works without a
+preceding preview, independent re-validation, replay rejection, PII-free
+audit), the full tenant-binding adversarial set (DSR/contact org
+mismatch, same-org-elsewhere admin, dual-membership caller, forged
+`withTenantContext` values, caller-id impersonation), consent-history
+preservation, and the transactional-safety chaos test. One pre-existing
+M1.6 test (`compliance-schema.test.ts`'s platform-default retention row
+enumeration) was updated to include `'contacts'` — a legitimate
+consequence of the new row, not a weakened assertion.
+
+**Still open for Milestone 2.1**: `packages/crm`, RBAC keys (2.1E),
+`/api/v1/companies`/`/api/v1/contacts` routes (2.1F, including wiring
+the DSR route dispatch), UI (2.1G), and the final milestone-wide
+adversarial/closeout pass (2.1H). Milestone 2.1 is not closed.
+
 ---
 
 ## Overall Phase 1 Recommendation

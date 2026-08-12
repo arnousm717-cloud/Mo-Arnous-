@@ -11,6 +11,8 @@ export {
   getDataSubjectRequestById,
   previewUserErasure,
   executeUserErasure,
+  previewContactErasure,
+  executeContactErasure,
   listOverdueDataSubjectRequests,
   type FileDataSubjectRequestInput,
   type DataSubjectRequest,
@@ -19,4 +21,6 @@ export {
   type DsrStatus,
   type ErasurePreview,
   type ErasureResult,
+  type ContactErasurePreview,
+  type ContactErasureResult,
 } from "./data-subject-requests";
