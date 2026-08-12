@@ -15,3 +15,9 @@ export {
   type EnvironmentTargetInputs,
   type EnvironmentTargetResult,
 } from "./environment-target";
+export {
+  classifyMigrationSql,
+  type DestructiveCategory,
+  type DestructiveFinding,
+  type ClassificationResult,
+} from "./migration-safety";

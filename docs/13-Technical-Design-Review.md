@@ -282,7 +282,7 @@ The highest-stakes milestone in Phase 1 — every later milestone's security pos
 - **Required documentation**: ADR-001 through ADR-004; the DR runbook.
 - **Required tests**: Destructive-migration-blocking test; environment-separation adversarial test.
 - **Manual QA checklist**: [ ] Attempt to merge a PR with a deliberately destructive migration, confirm CI blocks it [ ] Attempt to misconfigure a preview env var, confirm the check catches it.
-- **Automated QA checklist**: [x] Environment-separation invariant tests [x] Real Vercel Preview build-gate enforcing it [ ] CI migration-safety gate.
+- **Automated QA checklist**: [x] Environment-separation invariant tests [x] Real Vercel Preview build-gate enforcing it [x] CI migration-safety gate.
 - **GO / NO-GO: GO.**
 
 ### Implementation progress (M1.9, in progress — not yet closed)
@@ -348,8 +348,58 @@ which must not be conflated:
    misconfiguration of the same kind would fail that Preview's build
    automatically, rather than requiring another manual live test to catch.
 
-**Still open for M1.9**: CI migration-safety gate, ADR-002, the DR runbook,
-and the destructive-migration-blocking test. M1.9 is not closed.
+**Done — CI migration-safety gate.** `packages/database/src/migration-safety.ts`
+(`classifyMigrationSql`, exported from the package barrel) is a pure,
+offline function: it tokenizes a migration file's raw SQL (correctly
+excluding `--`/`/* */` comments, single-quoted string contents, and the
+bodies of dollar-quoted (`$$...$$`/`$tag$...$tag$`) function definitions
+from analysis) and matches the remaining top-level statements against a
+destructive-operation grammar (`DROP TABLE`/`COLUMN`/`TYPE`/`SCHEMA`,
+`TRUNCATE`, a `DROP ... CASCADE`, an unconditional or `WHERE`-scoped
+top-level `DELETE`, `ALTER COLUMN ... TYPE`, column/table renames). It
+fails closed on anything it cannot safely tokenize (an unterminated
+string/comment/dollar-quoted body). Calibrated against this repository's
+own real migration history, not just synthetic fixtures: `DROP CONSTRAINT`,
+`ALTER COLUMN ... DROP NOT NULL`, and `REFERENCES ... ON DELETE/UPDATE
+CASCADE` (used throughout the schema) are all correctly left unflagged,
+and the `DELETE FROM auth.users` inside the M1.6 GDPR erasure function is
+correctly recognized as reviewed source living inside a function body —
+not a statement that executes the moment the migration is applied — and is
+not flagged. One real classifier bug was found and fixed during this
+calibration: `REVOKE TRUNCATE, REFERENCES, TRIGGER ON ...` (the M1.8
+default-ACL-hardening migration) was initially misflagged, because
+`TRUNCATE` also names a Postgres *privilege* in a `GRANT`/`REVOKE`
+statement, not only the destructive command — the rule is now anchored to
+the start of a statement, where only the real command can appear.
+
+An intentionally destructive migration can be accepted only via a
+committed, auditable override — two comment lines, both required:
+`-- migration-safety: destructive-override` and
+`-- migration-safety-reason: <non-empty reason>`. A marker without a
+reason (or a reason without the marker) never overrides anything; the
+underlying finding is still reported even when a valid override is
+present, so an override is never a silent pass. This is read only from
+genuine SQL comments, never from string literal data, so it cannot be
+spoofed by data that merely contains the marker text.
+
+`packages/database/tests/migration-safety.test.ts` (66 tests) covers the
+full safe/blocked matrix, the false-positive protections above (including
+a dedicated regression test for the `REVOKE TRUNCATE` bug), multi-statement
+files, malformed-SQL fail-closed behavior, every override edge case, and —
+critically — runs the classifier against **every real migration file**
+currently in `packages/database/supabase/migrations/`, asserting none of
+them require an override. `packages/database/scripts/check-migration-safety.mjs`
+is the CI-invoked wrapper: reads every `.sql` file in that directory,
+reuses `classifyMigrationSql()` unchanged, and exits non-zero identifying
+the offending file and destructive categories the moment any one migration
+is unsafe. It makes no database connection, reads no environment variable,
+and requires no credential of any kind — wired into `.github/workflows/ci.yml`
+as the very first `run` step (after Node is set up, before `pnpm install`),
+so a destructive migration fails CI before any other step runs.
+
+**Still open for M1.9**: ADR-002 and the DR runbook. The CI migration-safety
+gate and the destructive-migration-blocking test are both done. M1.9 is not
+closed.
 
 ---
 

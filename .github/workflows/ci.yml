@@ -20,6 +20,22 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
+      # M1.9 migration-safety gate. Runs before `pnpm install` deliberately
+      # — packages/database/scripts/check-migration-safety.mjs and the
+      # migration-safety.ts module it imports have zero dependencies
+      # (only node:fs/node:path/node:url plus a plain TS import, the same
+      # native-type-stripping pattern already proven working under this
+      # exact GitHub Actions Node version by
+      # apps/web/scripts/verify-preview-environment.mjs, which has run
+      # green in real CI on this branch), so nothing here needs
+      # node_modules. It's placed after actions/setup-node (the one real
+      # runtime requirement: a Node new enough for that native TS import)
+      # but before every other step, for the earliest possible failure on
+      # a destructive migration — pure static analysis of committed SQL
+      # files, no database connection, no Supabase credentials, no
+      # DATABASE_URL, no network request of any kind.
+      - run: node packages/database/scripts/check-migration-safety.mjs
+
       - run: pnpm install --frozen-lockfile
 
       # Merge-blocking per docs/10-CLAUDE.md §8: a known high/critical
