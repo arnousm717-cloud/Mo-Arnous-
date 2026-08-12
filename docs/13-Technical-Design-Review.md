@@ -282,8 +282,74 @@ The highest-stakes milestone in Phase 1 — every later milestone's security pos
 - **Required documentation**: ADR-001 through ADR-004; the DR runbook.
 - **Required tests**: Destructive-migration-blocking test; environment-separation adversarial test.
 - **Manual QA checklist**: [ ] Attempt to merge a PR with a deliberately destructive migration, confirm CI blocks it [ ] Attempt to misconfigure a preview env var, confirm the check catches it.
-- **Automated QA checklist**: [ ] CI migration-safety gate [ ] CI environment-separation check.
+- **Automated QA checklist**: [x] Environment-separation invariant tests [x] Real Vercel Preview build-gate enforcing it [ ] CI migration-safety gate.
 - **GO / NO-GO: GO.**
+
+### Implementation progress (M1.9, in progress — not yet closed)
+
+**Done — CI environment-separation guard.** `packages/database/src/environment-target.ts`
+(`verifyEnvironmentTarget`, exported from the package barrel) is a pure,
+no-network function: given a deployment context (`production` / `preview` /
+`development`) and the two targets a Preview deployment resolves at runtime
+— the Supabase Auth project (`NEXT_PUBLIC_SUPABASE_URL`) and the Postgres
+project (`DATABASE_URL`, parsed from its Transaction Pooler username per
+ADR-004) — it fails closed unless both equal the expected staging project
+ref (`EXPECTED_STAGING_PROJECT_REF = "damunjcpwxthdjaonatb"`, committed in
+that file: a project ref is a public identifier, not a credential, so this
+carries no secret-exposure risk; rotate it there if staging is ever
+recreated). `production` and `development` are never evaluated against the
+staging ref — this guard's only job is stopping Preview from silently
+resolving to Production. `packages/database/tests/environment-target.test.ts`
+covers the full pass/fail matrix, including the exact M1.9 adversarial
+scenario (Preview's Auth target resolves to Production while its DB target
+also resolves to Production) and confirms failure messages never contain a
+password, connection string, or key.
+
+**What this proves vs. what it doesn't — three distinct layers.** M1.9's
+environment-separation guarantee is now backed by three separate things,
+which must not be conflated:
+
+1. **Pure configuration invariant tests**
+   (`packages/database/tests/environment-target.test.ts`, 21 tests) —
+   prove `verifyEnvironmentTarget()`'s own decision logic is correct
+   against synthetic inputs. No I/O, no real values, runs anywhere.
+2. **Real Vercel Preview build enforcement**
+   (`apps/web/scripts/verify-preview-environment.mjs`, wired into
+   `apps/web`'s own `build` script as `node
+   ./scripts/verify-preview-environment.mjs && next build`) — reuses
+   `verifyEnvironmentTarget()` unchanged, but reads the *real*
+   `VERCEL_ENV` / `NEXT_PUBLIC_SUPABASE_URL` / `DATABASE_URL` a genuine
+   Vercel build has available at build time. When `VERCEL_ENV === "preview"`
+   and either target doesn't resolve to the expected staging project
+   (`damunjcpwxthdjaonatb`), the script exits non-zero and **fails the
+   build** — Preview cannot deploy with a misconfigured target. Production
+   builds (`VERCEL_ENV === "production"`) and any build where `VERCEL_ENV`
+   isn't set (local `next build`, `pnpm build` in GitHub Actions) are
+   never evaluated against the staging ref — this script only ever
+   protects Preview. Covered by `apps/web/tests/verify-preview-environment.test.ts`
+   (18 tests): in-process tests against the script's exported pure
+   functions, plus a genuine subprocess-level adversarial test that spawns
+   the script exactly as `next build` would and asserts on its real exit
+   code (0 for correct/production/local, non-zero for every mismatch or
+   missing-variable case) — this is the actual "prove the gate has teeth"
+   evidence, not just a function-return-value check. GitHub Actions itself
+   still cannot exercise this against Vercel's *real* Preview values (it
+   has no access to them); what CI proves is that the script's logic is
+   correct and that a deliberately-wrong synthetic input reliably produces
+   a non-zero exit — the live enforcement happens inside Vercel's own
+   Preview build, not inside GitHub Actions.
+3. **Live environment verification** (already completed, see the
+   addendum above) — the one-time manual end-to-end test: real Preview
+   deployment, real signup, real staging Auth + staging Postgres, matching
+   rows found directly in staging's
+   `public.users`/`organizations`/`memberships`. This is the only layer
+   that has ever touched a real Vercel deployment; it is not re-run
+   automatically by anything, but layer 2 above now means a *future*
+   misconfiguration of the same kind would fail that Preview's build
+   automatically, rather than requiring another manual live test to catch.
+
+**Still open for M1.9**: CI migration-safety gate, ADR-002, the DR runbook,
+and the destructive-migration-blocking test. M1.9 is not closed.
 
 ---
 

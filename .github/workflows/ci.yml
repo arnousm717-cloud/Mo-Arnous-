@@ -60,4 +60,14 @@ jobs:
       # everything else genuinely stopped) before being written here.
       - run: pnpm --filter @ai-revenue-os/database exec supabase start -x realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector,supavisor,postgres-meta,postgrest
 
+      # Includes packages/database/tests/environment-target.test.ts (M1.9
+      # environment-separation guard): a pure, no-network invariant test —
+      # it proves the guard's logic (Preview must resolve to the staging
+      # project, on both the Auth and Postgres targets, or fail closed), not
+      # that any real Vercel Preview deployment is actually configured that
+      # way. GitHub Actions has no access to Vercel's real Preview env vars,
+      # so it cannot and does not attempt that separate, live check — see
+      # docs/13-Technical-Design-Review.md §M1.9 for what is and isn't
+      # proven by this step versus the manual live verification already
+      # performed against the real Preview deployment.
       - run: pnpm test
