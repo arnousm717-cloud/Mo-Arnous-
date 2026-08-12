@@ -87,6 +87,18 @@ Milestone-scoped, per `docs/12-Implementation-Milestones.md`. Each entry lists w
 - No password-reset flow yet (only signup confirmation) — not part of M1.3's stated deliverables; a real, non-stubbed provider is wired and this can follow the same pattern.
 - Signup funnel drop-off tracking (verification-not-completed) is an M1.8 (Observability) concern, not built here, per the TDR's own sequencing note.
 
+**Closeout — live end-to-end verification**
+
+M1.3 was intentionally left open after implementation, pending a real signup/email-confirmation test through a running application with a real (non-stubbed) transactional email provider — the TDR's own conditional-GO requirement ("GO, conditional... not complete until a real transactional email provider... is wired and verified end-to-end"). That verification is now complete:
+
+- Resend Custom SMTP configured and live-verified: a real confirmation email was sent and received (previously blocked by Supabase's default test-SMTP "email rate limit exceeded" — resolved by switching to Custom SMTP, not by any code change).
+- Full flow live-verified in Production: `/signup` → `/signup/check-email` → confirmation email received and clicked → `/auth/callback` → session established → `/dashboard`.
+- Database provisioning confirmed directly in Supabase: `public.users`, `public.organizations`, and `public.memberships` rows created correctly, membership `status = active`, `organization_id` matches, and the dashboard correctly resolves and displays the new user as `org_admin`.
+- A dedicated closeout audit re-ran the full verification suite against this same commit, with zero code changes required: lint, typecheck, and build all clean; **357/357 tests passing (0 failed, 0 skipped)** across all 5 packages; targeted secret/security scan clean (no committed credentials; the server-only secrets `DATABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are unreachable from any client-bundled code path).
+- **M1.3 status: PASS — CLOSED.**
+
+**Known open item, explicitly not addressed here**: Preview-environment `DATABASE_URL` scoping (confirming Vercel's Preview deployments use the dedicated staging Supabase project for the direct-Postgres connection, not just for Supabase Auth) is an open M1.9 (CI/CD Hardening & Environment Separation) action item — not an M1.3 blocker, and deliberately left unchanged during this closeout.
+
 ## M1.4 — Agency Hierarchy + Basic White-Label Theming
 
 **Added**
