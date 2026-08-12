@@ -590,6 +590,108 @@ consequence of the new row, not a weakened assertion.
 the DSR route dispatch), UI (2.1G), and the final milestone-wide
 adversarial/closeout pass (2.1H). Milestone 2.1 is not closed.
 
+### Security Remediation — Function EXECUTE Privileges + NULL-Safe Auth Guards (post-2.1C, local only)
+
+Two independent, systemic vulnerabilities were found during the 2.1C
+staging-deployment verification and a follow-up repository-wide function-
+privilege audit, both release-blocking, neither specific to Milestone
+2.1's own new functions (they affected every `SECURITY DEFINER` function
+in the schema back to M1.3). **This entry documents local implementation
+and testing only — staging and Production remediation had not happened
+as of this writing; see "Deployment status" below.**
+
+**Root cause 1 — PostgreSQL's compiled-in default grants `EXECUTE` on
+every new function to `PUBLIC`.** No migration in this repository's
+history had ever revoked it. Confirmed live on staging via
+`has_function_privilege()`: `anon` and `authenticated` could both execute
+every function in the schema, including the two private helpers
+(`_validate_user_erasure`, `_validate_contact_erasure`) whose own doc
+comments claimed "not granted to authenticated" — a claim the actual
+grants never enforced. The M1.9 default-privilege hardening
+(`20260811100000`/`20260811110000`) was explicitly table-scoped only and
+never touched functions.
+
+**Root cause 2 — the caller-identity guard shape used by seven functions
+was NULL-unsafe.** `p_caller_user_id is null or p_caller_user_id <>
+auth.uid()`: SQL's `<>` against a NULL operand evaluates to NULL (never
+true/false), and PL/pgSQL's `IF` treats a NULL condition as "do not
+execute THEN" — so when `auth.uid()` is NULL (the unauthenticated case),
+a caller supplying *any* non-null id parameter sailed past the guard
+entirely, impersonating that id. Verified empirically with a disposable
+PL/pgSQL probe before the fix was written, not assumed from reading the
+SQL. Affected: `create_organization_with_owner`, `create_agency_with_owner`,
+`create_client_organization_for_agency`, `preview_user_erasure`,
+`execute_user_erasure`, `preview_contact_erasure`, `execute_contact_erasure`.
+
+**A third finding surfaced only during remediation, not part of the
+original two root causes**: `ALTER DEFAULT PRIVILEGES ... IN SCHEMA
+public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` — the schema-scoped form,
+the direct functional analog of 20260811100000's working table-level
+statement — silently has **no effect** on functions. Confirmed
+empirically (fresh `db reset`, zero pre-existing default-privilege state,
+a disposable probe function created/checked/dropped both before and
+after the fix) and independently corroborated by PostgreSQL's own bug
+tracker: a schema-scoped default privilege can only *add* to the
+compiled-in default for functions, never remove from it. Only a
+role-scoped statement with **no** `IN SCHEMA` clause
+(`ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS
+FROM PUBLIC`) actually suppresses it. This asymmetry is function-specific
+— the same schema-scoped form was re-confirmed still correct for tables
+in the same session. The migration's Part 2 uses the unscoped form for
+this reason, documented inline.
+
+**Remediation — `packages/database/supabase/migrations/20260812140000_harden_function_execution_privileges.sql`**,
+four parts: (1) `REVOKE EXECUTE ... FROM PUBLIC` on every existing
+function in the schema, re-granting `authenticated` only where a real
+grant already existed or was silently missing (the three tenant-context
+functions `current_org`/`current_agency`/`current_role_key` had *no*
+explicit grant at all pre-fix, relying entirely on the PUBLIC default —
+revoking PUBLIC without adding these explicit grants would have broken
+every RLS policy in the schema the moment the migration applied); (2) the
+future-function default-privilege fix described above; (3)
+`CREATE OR REPLACE FUNCTION` redefinitions of the seven vulnerable
+functions, changing only the guard (`IF auth.uid() IS NULL OR
+p_caller_user_id IS NULL OR p_caller_user_id IS DISTINCT FROM auth.uid()
+THEN RAISE EXCEPTION` — `IS DISTINCT FROM` never returns NULL) —
+business logic, transaction behavior, `SECURITY DEFINER`, and
+`search_path` are otherwise byte-for-byte identical to the shipped
+version, `create_organization_with_owner`'s body read fresh from
+20260811090200 (the M1.7 `membership.created` event-emission version) so
+the redefinition doesn't regress that milestone; (4) idempotent
+re-statement of the `authenticated` grants `CREATE OR REPLACE` already
+preserves, so the migration's own end state is self-contained and
+legible without cross-referencing prior migrations.
+
+**Regression coverage** — `packages/database/tests/function-execution-privilege-hardening.test.ts`
+(41 tests): private-helper direct-invocation denial for both `anon` and
+`authenticated`; grant-level denial for `anon` on all seven hardened RPCs
+and the five RLS-support functions; an exact privilege-matrix assertion
+(`has_function_privilege`) across every touched function; a
+future-function probe proving zero inherited grants; and the core
+regression — a NULL-auth exploit reproduction per function category
+(org creation, agency creation, client-org creation under an agency, user
+erasure preview/execute, contact erasure preview/execute), each
+authenticated with no `sub` claim (`auth.uid()` genuinely NULL) supplying
+a real victim's id and asserting the call now raises rather than
+succeeds, plus confirmation the impersonated action never took effect
+(no org/agency/client-org row created, target user/contact still exists,
+DSR status still `pending`). Two legitimate-flow smoke tests confirm an
+authenticated caller can still act for themselves and still cannot act
+for a different real user (the pre-existing, correct half of the guard,
+unaffected by the NULL-safety fix).
+
+**Full validation, local only**: database 271/271 (229 pre-existing + 41
+new + 1 net), compliance 26/26, full monorepo 566/566; migration-safety
+29/29, no override; lint/typecheck/build clean across all five packages;
+`git diff --check` clean; secret scan clean; diff scope exactly two files
+(the migration and its test file) — no incidental changes elsewhere.
+
+**Deployment status: staging and Production were NOT touched by this
+work.** Both still run the pre-fix code as of this writing — the PUBLIC-
+execute default and the NULL-unsafe guards remain live in Production
+until this migration is deployed there. Staging/Cloud deployment is
+separate, later work requiring its own explicit approval.
+
 ---
 
 ## Overall Phase 1 Recommendation
