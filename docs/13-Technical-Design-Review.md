@@ -414,9 +414,26 @@ PostgREST — corrected to state they use the app's own `/api/v1/*` API
 instead (ADR-002), matching `04-API-Architecture.md` §8, which ADR-004
 itself already cited. The two ADRs no longer contradict each other.
 
-**Still open for M1.9**: the bad-migration-to-production DR runbook. The CI
-migration-safety gate, the destructive-migration-blocking test, and ADR-002
-are all done. M1.9 is not closed.
+**Done — bad-migration-to-production DR runbook.**
+`docs/runbooks/bad-migration-to-production.md` covers detection,
+containment (including the M1.9.1 project-ref re-verification discipline
+before any `--linked` command), assessment, a severity-based recovery
+decision tree, a forward-fix-only strategy consistent with this repo's
+append-only migration convention, and post-recovery tenant/RLS validation.
+It is explicit that Supabase automated backups and point-in-time recovery
+are documented in `docs/08-Security.md` §8 only as a target, not confirmed
+active anywhere in this repository, and marks any backup/PITR-based
+recovery path **UNVERIFIED — MUST CONFIRM IN SUPABASE DASHBOARD BEFORE
+USE** rather than assuming it.
+
+**M1.9 implementation deliverables complete; formal closeout verification
+pending.** ADR-001 through ADR-004 exist as real files; environment
+separation (validator, tests, and the real Vercel Preview build gate) is
+implemented; the CI migration-safety gate and its destructive-migration-
+blocking test are implemented; the bad-migration-to-production DR runbook
+now exists. A formal M1.9 closeout audit — re-verifying all of the above
+together against live CI/deployment evidence, the same discipline used to
+close M1.3 — has not yet been performed.
 
 ---
 
