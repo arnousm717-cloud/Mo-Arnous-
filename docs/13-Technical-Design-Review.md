@@ -458,6 +458,57 @@ verification above plus the real, green CI run already on record.
 
 ---
 
+## Milestone 2.1 — Companies & Contacts
+
+| # | Category | Assessment |
+|---|---|---|
+| 1 | Engineering risk | Low; the pattern (schema + RLS + grants + RBAC + API) is a direct repeat of what M1.2-M1.7 already validated, not a new pattern. |
+| 2 | Architecture risk | None new — `packages/crm` is an already-defined package boundary (`docs/02` §4), not a new one. |
+| 3 | Database risk | Two new tenant-scoped tables must ship RLS + base grants in the same migration (ADR-003) — the same discipline every prior tenant-scoped table followed. |
+| 4 | AI risk | None. |
+| 5 | Security risk | `contacts` is the first genuinely new personal-data table since M1.6 — it must be wired into the GDPR retention/DSR cascade in this same milestone, not deferred (`docs/10-CLAUDE.md` §8); getting this wrong repeats "one of the most common real-world GDPR compliance mistakes" the same doc names explicitly. |
+| 6 | Performance risk | None significant at this scale; `organization_id`-leading indexes and the `deleted_at IS NULL` partial index are the standard mitigation already used elsewhere. |
+| 7 | Scalability risk | None yet. |
+| 8 | Cost risk | None. |
+| 9 | DevOps risk | None significant — both migrations pass through the M1.9 migration-safety gate automatically. |
+| 10 | Testing strategy | RLS adversarial tests and the GDPR erasure re-validation test matter more than CRUD happy-path tests here. |
+| 11 | Rollback strategy | Standard — covered by the M1.9 DR runbook, no new consideration. |
+| 12 | Migration strategy | Straightforward additive; sequenced schema-then-GDPR-wiring-then-domain-logic-then-API (§27 of the approved planning report). |
+| 13 | Monitoring strategy | N/A beyond M1.8's existing request-logging wrapper, applied to the two new route handlers. |
+| 14 | Observability strategy | Same. |
+| 15 | Disaster recovery | N/A beyond M1.9's existing migration-safety/DR-runbook coverage — no new recovery scenario introduced. |
+
+- **Prerequisites**: M1.1, M1.2, M1.3, M1.5, M1.6, M1.9 complete (all closed).
+- **Success criteria**: A company and a contact can be created, read, updated, and soft-deleted, fully isolated per organization; a `contact`-type GDPR erasure request can be previewed and executed, independently re-validating and provably unable to affect another organization's data.
+- **Exit criteria**: Both tables exist with RLS/grants; `packages/crm` exists with tested validation logic; all 8 RBAC keys are enforced; both API resources are live with the standard conventions; `contacts` retention policy and erasure functions exist and are tested.
+- **Required documentation**: This entry; `docs/03-Database-Architecture.md` and `docs/04-API-Architecture.md` updated once the actual schema/routes ship (not part of this planning entry — implementation-time documentation, same discipline as every prior milestone).
+- **Required tests**: RLS adversarial isolation test (companies + contacts); cross-org `company_id` rejection test; API auth/authz boundary test; RBAC coverage test; GDPR erasure cross-org isolation test; erasure-vs-soft-delete distinction test.
+- **Manual QA checklist**: [ ] Create a company, create a contact under it, create a contact with no company [ ] Soft-delete a company, confirm its contacts' `company_id` is left intact but the company doesn't appear as an active relationship in the API response [ ] Attempt a duplicate contact email within one org, confirm `409` [ ] Attempt cross-org access to a company/contact `:id`, confirm `404` [ ] File and preview a `contact`-type DSR, confirm the preview is non-mutating [ ] Execute a `contact`-type DSR erasure, confirm the contact is hard-deleted/anonymized, not just `deleted_at`-marked.
+- **Automated QA checklist**: [ ] RLS isolation suite for both tables [ ] RBAC permission-matrix coverage [ ] GDPR erasure re-validation + cross-org isolation tests.
+- **GO / NO-GO: GO.**
+
+### Detailed design (2.1 planning — not yet implemented)
+
+This section records the approved design decisions from the 2.1 planning pass, so implementation has a concrete reference rather than re-deriving them.
+
+**Companies** — `id`, `organization_id` (`not null references organizations(id) on delete cascade`), `name` (`not null`), `domain`, `industry`, `employee_count`, `annual_revenue`, `linkedin_url`, `enrichment_status` (schema-complete per `docs/03` but functionally inert until Phase 3 Lead Enrichment), `owner_id` (`references public.users(id) on delete set null`), `deleted_at`, `created_at`/`updated_at`. No uniqueness constraint on `domain` — **approved decision: do not enforce per-organization domain uniqueness in 2.1**, since no existing document establishes this as a business invariant and enforcing it now risks rejecting legitimate records; a lookup index on `domain` may still be added if query patterns justify it. `organization_id`-leading index + partial index `WHERE deleted_at IS NULL` (`docs/03` line 187).
+
+**Contacts** — `id`, `organization_id` (`not null references organizations(id) on delete cascade`), `company_id` (`references companies(id) on delete set null`, nullable — a contact may exist without a company), `first_name`, `last_name`, `email` (unique per `organization_id`), `phone`, `job_title`, `linkedin_url`, `lifecycle_stage` (`check (lifecycle_stage in ('lead','prospect','customer','inactive'))`, nullable — intentionally minimal, no deal/pipeline-stage semantics, extendable later via a reviewed migration if real product need justifies it, not expanded speculatively), `owner_id`, `deleted_at`, `created_at`/`updated_at`. **Approved: a `CHECK` constraint requires at least one non-empty value among `first_name`, `last_name`, `email`** — `phone`/`job_title`/`company_id` alone never satisfy it; enforced identically at the database (`CHECK`), domain (`packages/crm` validation), and API (`400`) layers, not just one of the three.
+
+**Soft-deleted company + contact relationship — approved**: `contacts.company_id` is left **intact** when a company is soft-deleted — `deleted_at` is not a hard delete, so no FK action fires, and rewriting the reference would destroy a real historical relationship for no compliance reason. The API's default company/contact representation must not present a soft-deleted company as an *active* relationship (e.g. omit or clearly mark it), even though the underlying `company_id` value is untouched.
+
+**Duplicate contact email — approved**: `POST /api/v1/contacts` with an email already used (non-deleted) within the same organization returns `409 Conflict`. No implicit upsert. `PATCH` is the only path that updates an existing row; `POST` never silently mutates one.
+
+**RLS/grants**: identical pattern to every existing tenant-scoped table — `organization_id = current_org()` policies for `SELECT`/`INSERT`/`UPDATE`, base grants for `authenticated` on the same three, **no `DELETE` grant or policy on either table** (ordinary "delete" is an `UPDATE` setting `deleted_at`, matching the existing `public.users` RLS precedent exactly — "no delete policy, account removal is a GDPR/DSR cascade"). Both migrations inherit the M1.9-hardened default table privileges automatically.
+
+**RBAC**: new `PermissionKey` values `companies:read`/`create`/`update`/`delete` and `contacts:read`/`create`/`update`/`delete` (the `permissions.ts` file's own existing comment already names this exact gap: *"no CRM permissions exist here yet because no CRM tables exist yet"*). Proposed grants: `org_admin` — all eight; `org_member` — read/create/update, no delete; `org_viewer` — read only; `agency_owner`/`agency_admin` — none directly (agency cross-org access only through named roll-up views, per `docs/10-CLAUDE.md` §2 — a CRM-specific roll-up view is explicitly out of 2.1's scope, no evidence it's required for Companies & Contacts to function standalone).
+
+**GDPR/DSR integration — approved as an in-milestone deliverable, not deferred**: `docs/03-Database-Architecture.md` §2.8 already states the DSR cascade "extends into CRM/Brain tables in later milestones" — this is that milestone for `contacts`. Mirrors the M1.6 `user` pattern exactly: a `data_retention_policies` row for `contacts` (proposed: the same 2555-day default the three existing categories use, adjustable, not a rigid business decision); `preview_contact_erasure(dsr_id, caller_user_id)` / `execute_contact_erasure(dsr_id, caller_user_id)` `SECURITY DEFINER` functions, both independently re-validating caller authorization within the target's own organization, `execute` never trusting a prior `preview` (matching `execute_user_erasure()`'s own discipline exactly); the audit log entry written inside the same transaction as the erasure (Unit-of-Work, `docs/02` §7). **`companies` is out of this requirement** — it holds firmographic/business data, not personal data of a natural person (`owner_id` refers to platform staff, not a data subject), so CLAUDE.md §8's retention/cascade rule doesn't apply to it. The ordinary `deleted_at` soft-delete on `contacts` remains categorically distinct from this erasure path — a soft-deleted contact is not GDPR-erased, and a GDPR-erased contact is never merely `deleted_at`-marked.
+
+**Sequencing**: schema (companies + contacts + RLS + grants) → GDPR retention/erasure wiring for `contacts` → `packages/crm` domain logic → RBAC keys → API routes → UI (`EntityTable`, separate, real work) → adversarial/final verification, matching every prior milestone's plan-then-verify discipline.
+
+---
+
 ## Overall Phase 1 Recommendation
 
 | Milestone | Verdict |

@@ -109,6 +109,21 @@ Breaks `09-Development-Roadmap.md`'s phases into small, independently-deployable
 
 ---
 
+## Phase 2 — CRM (2.1 detailed; 2.2 onward remain a map, per §"Phases 2-8" below)
+
+### 2.1 — Companies & Contacts
+
+- **Goal**: Ship the first real CRM entities — Companies and Contacts — with full tenant-isolated CRUD, proving the RLS/RBAC/API pattern every later CRM resource repeats. This is deliberately the smallest possible CRM slice: no Deals, Pipelines, Activities, Notes, Tags, kanban, enrichment, n8n, or AI in this milestone.
+- **Deliverables**: `companies`/`contacts` tables (schema, RLS, grants); `packages/crm` (new package — creation/validation logic only); 8 new RBAC permission keys (`companies:read/create/update/delete`, `contacts:read/create/update/delete`); `/api/v1/companies`, `/api/v1/contacts` route handlers (full CRUD, cursor pagination, `Idempotency-Key`, the standard error envelope); `contacts` wired into the GDPR retention/DSR architecture in this same milestone (`preview_contact_erasure`/`execute_contact_erasure`, mirroring M1.6's `user` pair) — not deferred, per `docs/10-CLAUDE.md` §8's standing rule that a new personal-data table's retention/erasure wiring lands in the same PR that introduces the table.
+- **Database migrations**: Two new tables (`companies`, `contacts`) with `organization_id`-scoped RLS + base grants (ADR-003 pattern — no `DELETE` grant/policy on either, since ordinary "delete" is an `UPDATE` setting `deleted_at`, matching the existing `public.users` precedent); a `data_retention_policies` row for `contacts`; the `preview_contact_erasure`/`execute_contact_erasure` `SECURITY DEFINER` functions. `contacts.lifecycle_stage` uses a minimal, intentionally narrow initial set — `lead`/`prospect`/`customer`/`inactive` — no deal/pipeline-stage semantics; extendable later via a reviewed migration if real product need justifies it, not expanded speculatively now.
+- **API changes**: `GET/POST /api/v1/companies`, `GET/PATCH/DELETE /api/v1/companies/:id`, and the same four for `/api/v1/contacts` — first real use of `docs/04-API-Architecture.md` §1's general conventions (cursor pagination, `Idempotency-Key`, error envelope) by a resource other than the three already-implemented ones. Cross-org `:id` access returns `404`, matching the DSR-route precedent. A duplicate `contacts.email` within one organization on `POST` returns `409 Conflict` — never an implicit upsert; `PATCH` is the only path that updates an existing contact.
+- **UI changes**: None in this milestone's minimal core — `EntityTable` (`docs/07-UI-UX-System.md`) is real, separate work with no `packages/ui` yet to build it in, sequenced as its own step once schema/API/RBAC exist.
+- **AI changes**: None.
+- **Tests**: Database/constraint tests; RLS adversarial tests (org A cannot read/update/soft-delete org B's company or contact, a cross-org `company_id` cannot be assigned to a contact, direct SQL as `authenticated` cannot bypass RLS, a soft-deleted record is excluded from default reads); domain/validation tests (`packages/crm`); API route tests (auth/authz boundary, 404-vs-403, `Idempotency-Key` replay, 409 on duplicate email); RBAC permission-matrix coverage for the 8 new keys; **GDPR erasure tests** proving `execute_contact_erasure()` cannot affect another organization's contact data, independently re-validates rather than trusting a prior preview (mirroring `execute_user_erasure()`'s own re-validation discipline), and is structurally distinct from the ordinary `deleted_at` soft-delete path.
+- **Documentation**: This entry; the corresponding `docs/13` TDR entry and detailed design section.
+
+---
+
 ## Phases 2-8 — Milestone Map (names + one-line goals only)
 
 Full 8-part detail for each of these is written at the start of its phase, once Phase 1 is done and real implementation experience can sharpen the plan rather than guessing at it now.
