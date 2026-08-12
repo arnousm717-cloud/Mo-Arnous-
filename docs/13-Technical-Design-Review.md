@@ -426,14 +426,35 @@ active anywhere in this repository, and marks any backup/PITR-based
 recovery path **UNVERIFIED — MUST CONFIRM IN SUPABASE DASHBOARD BEFORE
 USE** rather than assuming it.
 
-**M1.9 implementation deliverables complete; formal closeout verification
-pending.** ADR-001 through ADR-004 exist as real files; environment
-separation (validator, tests, and the real Vercel Preview build gate) is
-implemented; the CI migration-safety gate and its destructive-migration-
-blocking test are implemented; the bad-migration-to-production DR runbook
-now exists. A formal M1.9 closeout audit — re-verifying all of the above
-together against live CI/deployment evidence, the same discipline used to
-close M1.3 — has not yet been performed.
+**M1.9 implementation deliverables complete.** ADR-001 through ADR-004
+exist as real files; environment separation (validator, tests, and the
+real Vercel Preview build gate) is implemented; the CI migration-safety
+gate and its destructive-migration-blocking test are implemented; the
+bad-migration-to-production DR runbook now exists.
+
+**Formal closeout audit performed.** Both literal Exit Criteria are
+satisfied — the four ADRs exist as real files, and the DR runbook exists
+without overclaiming backup/PITR (explicitly marked **UNVERIFIED — MUST
+CONFIRM IN SUPABASE DASHBOARD BEFORE USE**, per `docs/08-Security.md` §8's
+own conditional wording, never treated as a confirmed capability). Both
+Success Criteria are satisfied: the destructive-migration gate was
+re-verified adversarially — a temporary, never-committed fixture correctly
+failed without an override and correctly passed (finding still visibly
+reported) with a valid override, then fully removed — and the
+misconfigured-preview-env criterion was met even more strongly than
+required, having been caught for real by the Turbo strict-env-mode
+incident, not only synthetically. Full validation re-run at closeout:
+462/462 tests, lint/typecheck/build all green, forced/uncached. Preview →
+staging live verification, the migration-safety commit's green CI run, and
+the Production health check are recorded as user-verified — not
+independently re-executed this session, and not upgraded to a stronger
+verification level than what was actually established. The one open item
+(a literal GitHub PR drill of a destructive migration) is a Manual QA
+checklist entry, not one of the two named Exit Criteria, and its
+underlying guarantee is independently proven by the adversarial CLI
+verification above plus the real, green CI run already on record.
+
+**M1.9 status: PASS — CLOSED.**
 
 ---
 
