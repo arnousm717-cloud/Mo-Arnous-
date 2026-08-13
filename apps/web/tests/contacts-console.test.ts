@@ -215,6 +215,34 @@ describe("createContactForResolvedContext()", () => {
     expect(second.createdId).toBeTruthy();
     expect(first.createdId).not.toBe(second.createdId);
   });
+
+  it("the same key reused for a genuinely different payload is a conflict, not a silent second write", async () => {
+    const admin = await createOrgWithRole("org_admin", "create-conflict-admin");
+    const key = randomUUID();
+    const first = await createContactForResolvedContext(
+      admin.userId,
+      formData({ idempotencyKey: key, firstName: "Conflict A" }),
+    );
+    expect(first.createdId).toBeTruthy();
+
+    const second = await createContactForResolvedContext(
+      admin.userId,
+      formData({ idempotencyKey: key, firstName: "Conflict B" }),
+    );
+    expect(second.error).toBeTruthy();
+    expect(second.createdId).toBeUndefined();
+
+    const client = await adminPool.connect();
+    try {
+      const r = await client.query(
+        "select count(*)::int as n from public.contacts where organization_id = $1 and first_name = 'Conflict B'",
+        [admin.organizationId],
+      );
+      expect(r.rows[0].n).toBe(0);
+    } finally {
+      client.release();
+    }
+  });
 });
 
 describe("updateContactForResolvedContext()", () => {
@@ -322,6 +350,30 @@ describe("updateContactForResolvedContext()", () => {
       formData({ idempotencyKey: key, firstName: "After" }),
     );
     expect(first).toEqual(second);
+  });
+
+  it("the same key reused for a genuinely different edit payload is a conflict, not a silent second write", async () => {
+    const admin = await createOrgWithRole("org_admin", "update-conflict-admin");
+    const contactId = await seedContact(admin.organizationId, { firstName: "Before" });
+    const key = randomUUID();
+
+    const first = await updateContactForResolvedContext(
+      admin.userId,
+      contactId,
+      formData({ idempotencyKey: key, firstName: "After A" }),
+    );
+    expect(first.error).toBeUndefined();
+
+    const second = await updateContactForResolvedContext(
+      admin.userId,
+      contactId,
+      formData({ idempotencyKey: key, firstName: "After B" }),
+    );
+    expect(second.error).toBeTruthy();
+
+    const response = await handleGetContact(admin.userId, contactId);
+    const body = (await response.json()) as { contact: { firstName: string } };
+    expect(body.contact.firstName).toBe("After A");
   });
 });
 

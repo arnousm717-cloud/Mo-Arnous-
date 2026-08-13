@@ -184,6 +184,34 @@ describe("createCompanyForResolvedContext()", () => {
     }
   });
 
+  it("the same key reused for a genuinely different payload is a conflict, not a silent second write", async () => {
+    const admin = await createOrgWithRole("org_admin", "create-conflict-admin");
+    const key = randomUUID();
+    const first = await createCompanyForResolvedContext(
+      admin.userId,
+      formData({ idempotencyKey: key, name: "Conflict Co A" }),
+    );
+    expect(first.createdId).toBeTruthy();
+
+    const second = await createCompanyForResolvedContext(
+      admin.userId,
+      formData({ idempotencyKey: key, name: "Conflict Co B" }),
+    );
+    expect(second.error).toBeTruthy();
+    expect(second.createdId).toBeUndefined();
+
+    const client = await adminPool.connect();
+    try {
+      const r = await client.query(
+        "select count(*)::int as n from public.companies where organization_id = $1 and name = 'Conflict Co B'",
+        [admin.organizationId],
+      );
+      expect(r.rows[0].n).toBe(0);
+    } finally {
+      client.release();
+    }
+  });
+
   it("a genuinely new create action (a new key) creates a second, distinct company", async () => {
     const admin = await createOrgWithRole("org_admin", "create-new-key-admin");
     const first = await createCompanyForResolvedContext(
@@ -288,6 +316,30 @@ describe("updateCompanyForResolvedContext()", () => {
       formData({ idempotencyKey: key, name: "After" }),
     );
     expect(first).toEqual(second);
+  });
+
+  it("the same key reused for a genuinely different edit payload is a conflict, not a silent second write", async () => {
+    const admin = await createOrgWithRole("org_admin", "update-conflict-admin");
+    const companyId = await seedCompany(admin.organizationId, { name: "Before" });
+    const key = randomUUID();
+
+    const first = await updateCompanyForResolvedContext(
+      admin.userId,
+      companyId,
+      formData({ idempotencyKey: key, name: "After A" }),
+    );
+    expect(first.error).toBeUndefined();
+
+    const second = await updateCompanyForResolvedContext(
+      admin.userId,
+      companyId,
+      formData({ idempotencyKey: key, name: "After B" }),
+    );
+    expect(second.error).toBeTruthy();
+
+    const response = await handleGetCompany(admin.userId, companyId);
+    const body = (await response.json()) as { company: { name: string } };
+    expect(body.company.name).toBe("After A");
   });
 });
 
