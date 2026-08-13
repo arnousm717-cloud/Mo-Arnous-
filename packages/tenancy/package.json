@@ -15,7 +15,7 @@
   },
   "devDependencies": {
     "@ai-revenue-os/config": "workspace:*",
-    "@supabase/supabase-js": "^2.112.1",
+    "@supabase/supabase-js": "^2.112.2",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.7"
