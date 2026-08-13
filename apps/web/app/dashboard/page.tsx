@@ -31,6 +31,8 @@ export default async function DashboardPage(): Promise<React.ReactElement> {
       <p>Role: {context.roleKey}</p>
       <nav>
         <Link href="/companies">Companies</Link>
+        {" | "}
+        <Link href="/contacts">Contacts</Link>
       </nav>
       <form action={logoutAction}>
         <button type="submit">Log out</button>

@@ -1317,6 +1317,92 @@ operation.
 adversarial/visual verification). 2.1G and Milestone 2.1 as a whole
 remain **not** complete.
 
+### 2.1G-C — Done (Contacts UI)
+
+Contacts list, inline create, detail, edit, and soft-delete —
+`apps/web/app/contacts` (+`/[id]`) — built by mirroring 2.1G-B's
+Companies UI pattern exactly: same ADR-004 architecture (Server
+Component → resolved context → pure access decision → Server Action →
+framework-independent `*-logic.ts` → the existing 2.1F-B Contacts
+handlers, in-process, no browser `fetch()` to `/api/v1/*`), same
+`EntityTable` usage, same link-based cursor continuation, same two-step
+delete confirmation with non-GDPR copy, same CSS Modules discipline —
+imported directly from `../companies/{owner-options,companies.module.css}`
+without modifying either file, avoiding a second copy of logic that
+isn't Companies-specific (active-member listing, shared styling).
+
+**Filters**: `companyId`/`ownerId`/`lifecycleStage`, all three preserved
+together across the filter form and cursor "Load more" links, matching
+`contacts-api.test.ts`'s already-proven filter behavior — no new filter
+logic, no offset, no search, no invented total counts.
+
+**Company relationship — a real edge case found and handled**: `listCompanies`
+(and therefore the new `listActiveCompanyOptions`) already excludes
+soft-deleted companies by design (2.1D), so a contact whose linked
+company is later soft-deleted would otherwise have its `companyId`
+silently drop out of the edit form's `<select>` options — on resubmit,
+an unrelated field change could then silently null out a real, still-
+valid `companyId` the user never intended to touch. Fixed with a small,
+targeted fallback in `ContactEditForm`: if the contact's stored
+`companyId` isn't in the active options list, it's added as a synthetic
+option (id-only, no name resolvable) so it stays selected and is never
+lost on resubmit unless the user deliberately picks something else. No
+cascade-delete behavior was invented — the contact's `companyId` is
+never touched by a company's own soft-delete, exactly as the existing
+backend already guarantees.
+
+**Duplicate email / identity invariant / invalid relationship**: none
+reimplemented client-side — `mapCrmError`'s existing
+`DuplicateContactEmailError` → 409 and `ValidationError`/
+`InvalidCompanyRelationshipError`/`InvalidOwnerError` → 400 mapping is
+surfaced to the form as-is. A short "provide at least one of first
+name, last name, or email" hint is UX only.
+
+**Owner-display limitation**: unchanged and still open — Contacts reuses
+`listActiveOwnerOptions` as-is (imported, not modified), so the owner
+filter/select shows raw user ids for the same reason recorded in the
+2.1G-B entry above. No `users` RLS change, no SECURITY DEFINER function,
+no migration were made or attempted here either, per the standing
+instruction. Still to be resolved separately before Milestone 2.1
+closeout.
+
+**Tests**: 31 new (`apps/web/tests/contacts-console.test.ts`) — access
+(6 roles), `listActiveCompanyOptions` (soft-deleted exclusion), create
+(mass-assignment ignored, identity invariant rejected, duplicate email
+409 + case-insensitive, invalid owner and cross-org company relationship
+both produce safe non-leaking errors, unauthorized rejected, same-key
+replay reuses the row with no duplicate insert, new key creates a
+genuinely new row), update (partial-update semantics, explicit-clear-to-
+null, `org_viewer` forbidden, duplicate-email-on-update rejected,
+invalid company relationship rejected safely, idempotent replay), delete
+(`org_admin` success + subsequent 404, `org_member` forbidden, confirmed
+still physically present with `deleted_at` set), the company-relationship-
+safety edge case above (contact stays readable and keeps its stored
+`companyId` after the linked company is soft-deleted), and security
+(pure agency actor denied, unaffiliated user denied, demoted actor's
+stale key rejected). All 31 passed on the first run. Deliberately does
+not re-test `handleListContacts`/`handleGetContact`'s own behavior —
+`contacts-api.test.ts` (21 tests, unmodified) already covers it
+exhaustively and these pages add no logic beyond URL/param assembly.
+
+**Full validation**: monorepo 873/873 (`ui` 21, database 284, auth 196,
+crm 87, tenancy 28, compliance 26, web 231 — includes the 31 new
+Contacts UI tests plus the unmodified 22 `companies-api.test.ts`, 21
+`contacts-api.test.ts`, 27 `companies-console.test.ts`, and every other
+pre-existing suite); migration-safety 31/31, **no new migration**;
+lint/typecheck/build clean across all 7 packages — a real Next.js
+production build again confirms clean compilation, now with `/contacts`
+and `/contacts/[id]` alongside the existing routes; `git diff --check`
+clean; secret scan clean. No transient/flaky failures this run.
+
+**Not part of this step**: no change to Companies UI files (only
+imported from), no `packages/ui` change, no new permission, no schema/
+migration/RLS change, no staging/Production operation.
+
+**Remaining in Milestone 2.1**: 2.1G-D (final UI/adversarial/visual
+verification) only. 2.1G and Milestone 2.1 as a whole remain **not**
+complete.
+
 ---
 
 ## Overall Phase 1 Recommendation
