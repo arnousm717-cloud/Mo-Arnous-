@@ -19,7 +19,7 @@
   "devDependencies": {
     "@ai-revenue-os/config": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.2.0",
     "next": "^15.5.23",
     "typescript": "^5.7.0",
     "vitest": "^3.2.7"
