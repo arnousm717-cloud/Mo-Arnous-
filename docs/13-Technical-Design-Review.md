@@ -972,6 +972,82 @@ not real secrets).
 DSR `subject_type` dispatch change (2.1F-C), no staging/Production
 deployment.
 
+### 2.1F-B — Done (Companies & Contacts API routes)
+
+The 10 CRUD/list routes for Companies and Contacts
+(`apps/web/app/api/v1/companies`, `.../companies/[id]`,
+`.../contacts`, `.../contacts/[id]`), wiring together `packages/crm`
+(2.1D), the CRM RBAC matrix (2.1E), and the Idempotency-Key foundation
+(2.1F-A) for the first time at the HTTP layer. Full contract recorded in
+`04-API-Architecture.md` §2.4 — not duplicated here.
+
+**Route structure**: each collection (`companies`, `contacts`) follows
+the existing `organizations`/`data-subject-requests` handler pattern —
+`route.ts` owns pure HTTP concerns (session resolution, same-origin
+check, JSON parsing, query-param/header extraction, `withRequestLogging`)
+and delegates immediately to a sibling `handlers.ts`, which owns org
+context resolution, `can()`, the `packages/crm` call, idempotency
+orchestration, and domain-error-to-HTTP mapping — preserving the
+repository's existing handler testability convention (handlers are
+plain, dependency-injectable async functions, exercised directly in
+tests without spinning up a real HTTP server). `resolveActor`,
+`mapCrmError`, and the response-shaping helper are defined once in each
+resource's collection-level `handlers.ts` and imported by the sibling
+`[id]/handlers.ts`, avoiding five-function duplication per resource
+while keeping the import direction consistent with how the two files
+are always read together.
+
+**Findings during implementation**: none rose to the "architectural
+contradiction or new migration required" bar the approved scope named as
+a stop condition — the existing `packages/crm`/RBAC/idempotency
+primitives from 2.1D/2.1E/2.1F-A composed directly at the route layer
+with no schema change and no design reversal.
+
+**Tests**: 43 new (`apps/web/tests/companies-api.test.ts`: 22;
+`apps/web/tests/contacts-api.test.ts`: 21), covering auth, RBAC (every
+role × every verb, including a pure agency actor and a fully
+unaffiliated authenticated user), tenancy (cross-org indistinguishable
+from nonexistent, never `403`), full CRUD lifecycle, list/pagination/
+filters (including contacts' `companyId`/`ownerId`/`lifecycleStage`),
+`POST`/`PATCH` idempotency (exact replay, payload-mismatch conflict,
+cross-org key isolation, a demoted actor not receiving a stale replay),
+and a 10-point adversarial/mass-assignment list (body-level
+`organizationId`/`organization_id`/`id`/`deletedAt`/`enrichmentStatus`
+injection, unknown-field silent ignoring, and an unexpected-failure case
+proving the transaction rolls back with no persisted idempotency row,
+followed by a successful retry). Contacts additionally covers its
+identity-invariant rule, duplicate/case-insensitive email conflicts,
+email reuse after soft-delete, invalid/cross-org/soft-deleted
+`companyId` all mapping to the same `400`, and a contact remaining
+readable after its linked company is later soft-deleted. A fixture bug
+was found and fixed along the way: the new API-level test fixtures
+created memberships via direct SQL (bypassing
+`create_organization_with_owner()`), which never set
+`public.users.default_organization_id` — the column
+`get_my_membership_context()` actually keys its resolution on — causing
+19/22 companies tests to fail with `403` before the fixture was
+corrected to set it explicitly.
+
+**Full validation**: monorepo 782/782 (database 284, auth 196, crm 87,
+compliance 26, tenancy 28, web 161 — web includes the 43 new
+companies/contacts tests alongside all pre-existing API/idempotency/
+logging/redaction suites, unmodified and unweakened); migration-safety
+31/31 migrations checked, **no new migration** (none was needed);
+lint/typecheck/build clean across all 6 TypeScript packages plus the
+Next.js build (all 4 new route paths confirmed present in the build
+output); `git diff --check` clean; secret scan of all new/changed files
+clean.
+
+**Not part of this step**: no DSR `subject_type` dispatch change
+(2.1F-C), no UI, no agency CRM roll-up access, no search, no offset
+pagination, no hard-delete, no Deals/Pipelines/Activities/Notes/Tags, no
+RBAC changes, no new migration, no staging/Production deployment, no
+commit/push.
+
+**Remaining in Milestone 2.1**: 2.1F-C (DSR `subject_type` dispatch for
+Companies/Contacts) and 2.1F-D (full API/adversarial verification pass).
+Milestone 2.1 and 2.1F as a whole are **not** complete.
+
 ---
 
 ## Overall Phase 1 Recommendation

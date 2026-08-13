@@ -33,6 +33,9 @@ importers:
       '@ai-revenue-os/compliance':
         specifier: workspace:*
         version: link:../../packages/compliance
+      '@ai-revenue-os/crm':
+        specifier: workspace:*
+        version: link:../../packages/crm
       '@ai-revenue-os/database':
         specifier: workspace:*
         version: link:../../packages/database

@@ -12,6 +12,7 @@
   "dependencies": {
     "@ai-revenue-os/auth": "workspace:*",
     "@ai-revenue-os/compliance": "workspace:*",
+    "@ai-revenue-os/crm": "workspace:*",
     "@ai-revenue-os/database": "workspace:*",
     "@ai-revenue-os/tenancy": "workspace:*",
     "@sentry/nextjs": "^10.70.0",
