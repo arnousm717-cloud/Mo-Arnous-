@@ -12,18 +12,20 @@
   "dependencies": {
     "@ai-revenue-os/auth": "workspace:*",
     "@ai-revenue-os/compliance": "workspace:*",
+    "@ai-revenue-os/database": "workspace:*",
     "@ai-revenue-os/tenancy": "workspace:*",
     "@sentry/nextjs": "^10.70.0",
     "next": "^15.5.23",
+    "pg": "^8.13.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@ai-revenue-os/config": "workspace:*",
-    "@ai-revenue-os/database": "workspace:*",
     "@sentry/core": "^10.70.0",
     "@supabase/supabase-js": "^2.112.1",
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.7.0",

@@ -858,8 +858,119 @@ test per migration file], auth 196, crm 87, tenancy 28, compliance 26,
 web 103); lint/typecheck/build clean across all 7 packages;
 `git diff --check` clean; secret scan clean.
 
-**Still open for Milestone 2.1**: 2.1F (API routes + DSR route dispatch),
-2.1G (UI), 2.1H (final adversarial/closeout). Milestone 2.1 is not closed.
+**Still open for Milestone 2.1** (2.1F now split into sub-steps, see
+below): ~~2.1F~~, 2.1G (UI), 2.1H (final adversarial/closeout). Milestone
+2.1 is not closed.
+
+### 2.1F-A — Done (Idempotency-Key foundation)
+
+The Idempotency-Key subsystem backing companies/contacts `POST`/`PATCH`,
+scoped narrowly per the approved design — not a repository-wide
+framework, not retrofitted onto any existing route.
+
+**Database model**: `public.idempotency_keys` (new table,
+`organization_id`-scoped, `unique (organization_id, idempotency_key_hash)`
+— the sole access pattern this table has, so no additional index was
+added beyond what that constraint already provides). Neither the raw
+`Idempotency-Key` header nor the raw request body is ever persisted —
+only SHA-256 hashes of each (Node's built-in `crypto`, no new dependency).
+RLS: `organization_id = current_org()` for `SELECT`/`INSERT`/`UPDATE`/
+`DELETE`, `authenticated` only, no `anon` grant. **One deliberate
+departure from the companies/contacts "no `DELETE`" precedent**: this
+table gets a real `DELETE` grant/policy, since it holds ephemeral
+operational plumbing with no compliance/audit significance (unlike CRM
+records), needed for inline expired-key reclamation — no soft-delete
+concept applies here.
+
+**Concurrency**: `INSERT ... ON CONFLICT (organization_id,
+idempotency_key_hash) DO NOTHING RETURNING` — a returned row means this
+transaction owns the reservation; no row means another transaction
+already holds it, resolved via `SELECT ... FOR UPDATE` on the existing
+row (blocks until that transaction resolves, then reads its final state).
+**Empirically verified against real local Postgres with two independent
+connections** (a temporary probe script, created/run/deleted within the
+same session, no trace left) proving both required properties: (1)
+simultaneous identical requests produce exactly one persisted row and one
+real mutation; (2) when the reservation owner's transaction rolls back
+mid-mutation, the row disappears entirely and a concurrent contender
+correctly takes over and completes the mutation exactly once. **One
+finding worth recording honestly**: the empirical test revealed that
+`INSERT ... ON CONFLICT DO NOTHING` itself already blocks on an
+uncommitted conflicting row and resolves correctly based on the other
+transaction's outcome — more of the actual waiting happens at the INSERT
+statement than originally modeled; the subsequent `SELECT ... FOR UPDATE`
+remains correct and necessary (it's what safely reads the final row state
+and takes the lock needed for the fingerprint comparison), just not the
+sole source of the blocking behavior. A bounded retry loop (max 3
+attempts) handles the "owner rolled back, row now gone" case — 3 was
+chosen because this path is only ever reached by a genuinely rare race
+(another request's unexpected failure happening in the same narrow
+window), not a scenario expected to repeat; a fourth consecutive failure
+for the same key surfaces as a thrown error (mapped to `500` by whatever
+route calls it) rather than spinning further.
+
+**Transaction architecture**: `createCompany`, `updateCompany`,
+`createContact`, `updateContact` (`packages/crm`) each gained one
+optional, backward-compatible `existingClient?: PoolClient` parameter
+(via a small shared `runInClientOrTransaction` helper) — when supplied,
+the function runs against that already-open, already-tenant-scoped
+transaction instead of opening its own, which is what makes reservation +
+mutation + response persistence commit as a single atomic unit. Every
+existing caller/test omits it and is completely unaffected (87/87
+`packages/crm` tests pass unchanged). No HTTP concept enters
+`packages/crm` — `PoolClient` is a database-layer type the package
+already imports internally.
+
+**Response persistence**: a deterministic 4xx result returned by the
+wrapped callback (e.g. a `packages/crm` validation error, mapped to
+`{status, body}` by the *caller*, not by the idempotency helper itself)
+is persisted and replayed exactly like a success — retrying the identical
+invalid payload with the identical key deterministically reproduces the
+identical 4xx. An *unexpected* thrown error propagates out of the entire
+transaction, rolling back the reservation itself — no row survives a
+5xx-class failure, so a retry starts completely fresh. **A trade-off
+recorded explicitly, not glossed over**: exact replay semantics require
+storing the real response body, which for a successful contact
+create/update includes contact PII (email/phone/name) — mitigated by the
+24-hour TTL (approved default), organization-scoped RLS, no `anon`
+access, and a firm rule that `response_body` is never included in
+structured logs or generic observability metadata.
+
+**Package/file split**: `packages/database` gained only the migration —
+no new exported function, since the already-existing `withTenantContext`
+is sufficient plumbing. `apps/web/app/api/v1/_shared/idempotency.ts` (new,
+matching the existing `_shared/logger.ts`/`_shared/redaction.ts`/
+`_shared/same-origin.ts` convention) owns the actual orchestration and is
+deliberately generic — it has no knowledge of `Company`/`Contact`/
+`packages/crm`'s error classes/RBAC at all, only "run this callback;
+persist what it returns; let what it throws roll back everything." No new
+workspace package was created.
+
+**Missing header behavior**: `Idempotency-Key` is optional (approved
+decision) — a `POST`/`PATCH` without one is not rejected; it simply
+proceeds without idempotency protection (calling `packages/crm` directly,
+no reservation). This is a 2.1F-B route-layer decision, not implemented
+by anything in this step, since no route exists yet to make it in.
+
+**Tests**: 26 total — 11 schema/RLS (`packages/database/tests/idempotency-keys-schema.test.ts`:
+constraints, cross-org isolation, exact grant list, `anon` zero-privilege)
+plus 15 behavioral (`apps/web/tests/idempotency.test.ts`: hashing
+determinism/PII-freeness, first-execution-then-replay, fingerprint-mismatch
+conflict, cross-org independence, the two empirically-proven concurrency/
+rollback scenarios as real automated tests — not just the throwaway probe
+— expiration reclaim-and-reuse, 4xx persistence, and confirmation the raw
+key/request body never appear in the stored row).
+
+**Full validation**: monorepo 739/739 (database 284, auth 196, crm 87,
+compliance 26, tenancy 28, web 118); migration-safety 31/31, no override;
+lint/typecheck/build clean across all 6 TypeScript packages; `git diff
+--check` clean; secret scan clean (the only hits were deliberately-named
+test-fixture strings proving the never-persisted-in-plaintext property,
+not real secrets).
+
+**Not part of this step**: no Companies/Contacts API routes (2.1F-B), no
+DSR `subject_type` dispatch change (2.1F-C), no staging/Production
+deployment.
 
 ---
 

@@ -3,6 +3,7 @@ import { withTenantContext, type RequestContext } from "@ai-revenue-os/database"
 import { ValidationError, DuplicateContactEmailError, InvalidCompanyRelationshipError } from "./errors";
 import { decodeCursor, resolveLimit, buildPage, type Page } from "./pagination";
 import { validateOwner } from "./owner-validation";
+import { runInClientOrTransaction } from "./transaction";
 
 /**
  * Contacts domain logic (Milestone 2.1D, docs/13-Technical-Design-Review.md
@@ -160,7 +161,16 @@ function isDuplicateContactEmailError(err: unknown): boolean {
   return e.code === CONTACT_EMAIL_UNIQUE_VIOLATION_CODE && e.constraint === CONTACT_EMAIL_UNIQUE_INDEX;
 }
 
-export async function createContact(ctx: RequestContext & { organizationId: string }, input: CreateContactInput): Promise<Contact> {
+/**
+ * `existingClient` (2.1F-A): when supplied, runs against that already-open,
+ * already-tenant-scoped transaction instead of opening a new one — see
+ * companies.ts's createCompany for the full rationale.
+ */
+export async function createContact(
+  ctx: RequestContext & { organizationId: string },
+  input: CreateContactInput,
+  existingClient?: PoolClient,
+): Promise<Contact> {
   const firstName = input.firstName ?? null;
   const lastName = input.lastName ?? null;
   const email = input.email ?? null;
@@ -170,7 +180,7 @@ export async function createContact(ctx: RequestContext & { organizationId: stri
   validateContactIdentity(firstName, lastName, email);
   validateLifecycleStage(input.lifecycleStage ?? null);
 
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     await validateCompanyRelationship(client, ctx.organizationId, companyId);
     await validateOwner(client, ctx.organizationId, ownerId);
 
@@ -277,8 +287,9 @@ export async function updateContact(
   ctx: RequestContext & { organizationId: string },
   id: string,
   input: UpdateContactInput,
+  existingClient?: PoolClient,
 ): Promise<Contact | null> {
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     const current = await client.query<ContactRow>(
       `select ${CONTACT_COLUMNS} from public.contacts
        where id = $1 and organization_id = $2 and deleted_at is null`,

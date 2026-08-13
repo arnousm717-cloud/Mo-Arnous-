@@ -1,7 +1,9 @@
+import type { PoolClient } from "pg";
 import { withTenantContext, type RequestContext } from "@ai-revenue-os/database";
 import { ValidationError } from "./errors";
 import { decodeCursor, resolveLimit, buildPage, type Page } from "./pagination";
 import { validateOwner } from "./owner-validation";
+import { runInClientOrTransaction } from "./transaction";
 
 /**
  * Companies domain logic (Milestone 2.1D, docs/13-Technical-Design-Review.md
@@ -107,11 +109,23 @@ function validateCompanyName(name: unknown): string {
   return name.trim();
 }
 
-export async function createCompany(ctx: RequestContext & { organizationId: string }, input: CreateCompanyInput): Promise<Company> {
+/**
+ * `existingClient` (2.1F-A): when supplied, runs against that already-open,
+ * already-tenant-scoped transaction instead of opening a new one — used by
+ * the idempotency helper so reservation + mutation + response persistence
+ * commit atomically as one transaction. Omitted (the default, and every
+ * existing caller/test's behavior), this opens its own withTenantContext
+ * transaction exactly as before — fully backward-compatible.
+ */
+export async function createCompany(
+  ctx: RequestContext & { organizationId: string },
+  input: CreateCompanyInput,
+  existingClient?: PoolClient,
+): Promise<Company> {
   const name = validateCompanyName(input.name);
   const ownerId = input.ownerId ?? null;
 
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     await validateOwner(client, ctx.organizationId, ownerId);
 
     const r = await client.query<CompanyRow>(
@@ -196,8 +210,9 @@ export async function updateCompany(
   ctx: RequestContext & { organizationId: string },
   id: string,
   input: UpdateCompanyInput,
+  existingClient?: PoolClient,
 ): Promise<Company | null> {
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     const sets: string[] = [];
     const values: unknown[] = [];
 
