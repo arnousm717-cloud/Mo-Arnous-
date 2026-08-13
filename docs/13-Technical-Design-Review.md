@@ -1048,6 +1048,88 @@ commit/push.
 Companies/Contacts) and 2.1F-D (full API/adversarial verification pass).
 Milestone 2.1 and 2.1F as a whole are **not** complete.
 
+### 2.1F-C — Done (DSR subject_type dispatch)
+
+Closes the gap the 2.1F audit flagged: `preview`/`execute` were hardcoded
+to the `subject_type='user'` erasure path regardless of what a
+`data_subject_requests` row actually said, so a `subject_type='contact'`
+DSR (filable and schema-valid since 2.1C) had no real HTTP fulfillment
+path at all — `previewContactErasure`/`executeContactErasure` existed in
+`packages/compliance` but nothing in `apps/web` ever called them.
+
+**Dispatch design**: both handlers
+(`apps/web/app/api/v1/data-subject-requests/[id]/{preview,execute}/handlers.ts`)
+now fetch the DSR tenant-scoped via the already-existing
+`getDataSubjectRequestById` (RLS: `organization_id = current_org()`)
+**before** making any dispatch decision — a cross-org or nonexistent `id`
+is a plain `404`, identical either way, exactly as `GET
+/api/v1/data-subject-requests/{id}` already behaved. `subject_type` is
+read exclusively from that server-fetched row, never accepted from the
+request body/query/header, and never assumed. `subject_type='user'`
+routes to `previewUserErasure`/`executeUserErasure`; `'contact'` routes to
+`previewContactErasure`/`executeContactErasure`; `'visitor'`/
+`'portal_user'` are schema-valid but have no fulfillment logic and return
+`400` without either erasure function ever being invoked. The
+`data-subject-requests:execute` RBAC check is unchanged and still runs
+before the DSR fetch — no new permission key was introduced, and a
+non-admin is rejected before any DSR lookup happens at all.
+
+**No new SQL, no new migration**: both `packages/compliance` erasure
+function pairs already existed (M1.6, 2.1C) with their own independent
+`subject_type` guards inside each `SECURITY DEFINER` function (e.g.
+`preview_contact_erasure` raises `'... only supports subject_type=contact
+(got %)'` if called against a `user`-type DSR). This step is a pure
+application-layer routing change — `packages/compliance`'s public API is
+untouched, confirmed by dedicated tests (below) that call the erasure
+functions directly, cross-wise, and prove the database-level guard alone
+would have blocked an incorrect dispatch even without the new app-layer
+check.
+
+**Naming**: `handlePreviewUserErasure`/`handleExecuteUserErasure` were
+renamed to `handlePreviewErasure`/`handleExecuteErasure` — the old names
+became actively misleading once the same functions started handling
+`contact`-type requests too. The one existing test file exercising them
+(`apps/web/tests/compliance-api.test.ts`) was updated to the new names
+only; none of its assertions changed, since every case there still files
+a `subject_type='user'` request.
+
+**Tests**: 12 new
+(`apps/web/tests/dsr-erasure-dispatch.test.ts`) — user-path regression
+(full lifecycle including the `auth.users` hard-delete and a second
+`execute` correctly `409`-ing), contact-path end-to-end (including
+verifying the `contacts` row is actually gone after `execute`), a
+cross-org contact reference rejected without erasure, `visitor`/
+`portal_user` both `400` with the DSR left `pending` (parameterized over
+both values), nonexistent DSR `404`, cross-org DSR `404` for both
+subject types, RBAC/auth boundaries (`401` unauthenticated, `403`
+non-admin, `403` for a user with no org membership at all — before any
+DSR lookup), and two explicit database-level-guard tests that call
+`previewContactErasure`/`executeContactErasure` against a `user`-type DSR
+and `previewUserErasure`/`executeUserErasure` against a `contact`-type
+DSR directly, asserting each throws the SQL function's own
+`subject_type` guard exception. All 12 passed on the first run against
+the now-corrected dispatch logic — no fixture bugs found this time.
+
+**Full validation**: monorepo 794/794 (database 284, auth 196, crm 87,
+tenancy 28, compliance 26, web 173 — includes the 12 new dispatch tests
+and the renamed-but-otherwise-unchanged `compliance-api.test.ts`
+suite); migration-safety 31/31, **no new migration**; lint/typecheck/build
+clean across all 6 TypeScript packages plus the Next.js build; `git diff
+--check` clean; secret scan of all changed files clean. One transient
+full-suite failure was investigated during this step and traced to a
+stray Postgres trigger left over in the local dev database from an
+**earlier, unrelated 2.1F-B verification run** (a chaos-injection test
+in `contact-erasure.test.ts` that failed to reach its own cleanup after
+an interrupted run) — not a regression from this step's changes; the
+stray trigger was dropped and a clean re-run confirmed all suites green.
+
+**Not part of this step**: no UI, no new permission key, no new SQL
+function, no migration, no change to Companies/Contacts CRUD/idempotency,
+no staging/Production operation.
+
+**Remaining in Milestone 2.1**: 2.1F-D (full API/adversarial verification
+pass). Milestone 2.1 and 2.1F as a whole are still **not** complete.
+
 ---
 
 ## Overall Phase 1 Recommendation

@@ -4,8 +4,8 @@ import { withTenantContext, getPool, closePool } from "@ai-revenue-os/database";
 import { handleRecordConsent } from "../app/api/v1/consent/handlers";
 import { handleFileDataSubjectRequest } from "../app/api/v1/data-subject-requests/handlers";
 import { handleGetDataSubjectRequest } from "../app/api/v1/data-subject-requests/[id]/handlers";
-import { handlePreviewUserErasure } from "../app/api/v1/data-subject-requests/[id]/preview/handlers";
-import { handleExecuteUserErasure } from "../app/api/v1/data-subject-requests/[id]/execute/handlers";
+import { handlePreviewErasure } from "../app/api/v1/data-subject-requests/[id]/preview/handlers";
+import { handleExecuteErasure } from "../app/api/v1/data-subject-requests/[id]/execute/handlers";
 
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
 
@@ -209,10 +209,10 @@ describe("POST /api/v1/data-subject-requests/{id}/preview and /execute", () => {
     });
     const filedBody = await jsonOf<{ dataSubjectRequest: { id: string } }>(filed);
 
-    const previewResponse = await handlePreviewUserErasure(member, filedBody.dataSubjectRequest.id);
+    const previewResponse = await handlePreviewErasure(member, filedBody.dataSubjectRequest.id);
     expect(previewResponse.status).toBe(403);
 
-    const executeResponse = await handleExecuteUserErasure(member, filedBody.dataSubjectRequest.id);
+    const executeResponse = await handleExecuteErasure(member, filedBody.dataSubjectRequest.id);
     expect(executeResponse.status).toBe(403);
   });
 
@@ -231,12 +231,12 @@ describe("POST /api/v1/data-subject-requests/{id}/preview and /execute", () => {
     });
     const filedBody = await jsonOf<{ dataSubjectRequest: { id: string } }>(filed);
 
-    const previewResponse = await handlePreviewUserErasure(caller, filedBody.dataSubjectRequest.id);
+    const previewResponse = await handlePreviewErasure(caller, filedBody.dataSubjectRequest.id);
     const previewBody = await jsonOf<{ preview: { canProceed: boolean; blockerReason: string } }>(previewResponse);
     expect(previewResponse.status).toBe(200);
     expect(previewBody.preview.canProceed).toBe(false);
 
-    const executeResponse = await handleExecuteUserErasure(caller, filedBody.dataSubjectRequest.id);
+    const executeResponse = await handleExecuteErasure(caller, filedBody.dataSubjectRequest.id);
     expect(executeResponse.status).toBe(409);
 
     // orgY is otherwise unused beyond being created as the blocking org —

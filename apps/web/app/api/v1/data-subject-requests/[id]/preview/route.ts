@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getAuthenticatedUser } from "@ai-revenue-os/auth";
 import { isSameOrigin } from "../../../_shared/same-origin";
 import { withRequestLogging } from "../../../_shared/logger";
-import { handlePreviewUserErasure } from "./handlers";
+import { handlePreviewErasure } from "./handlers";
 
 export const POST = withRequestLogging(
   "POST",
@@ -14,6 +14,6 @@ export const POST = withRequestLogging(
 
     const { id } = await params;
     const user = await getAuthenticatedUser();
-    return handlePreviewUserErasure(user?.id ?? null, id);
+    return handlePreviewErasure(user?.id ?? null, id);
   },
 );
