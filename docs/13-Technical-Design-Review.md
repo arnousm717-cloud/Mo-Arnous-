@@ -1211,6 +1211,112 @@ of any kind.
 visual verification). 2.1G and Milestone 2.1 as a whole remain **not**
 complete.
 
+### 2.1G-B — Done (Companies UI)
+
+Companies list, inline create, detail, edit, and soft-delete —
+`apps/web/app/companies` (+`/[id]`) — the first real consumer of
+`EntityTable` (2.1G-A) and the first proof that this repository's
+first-party UI architecture (ADR-004) and the 2.1F Companies API can be
+reused together without a network hop.
+
+**Architecture**: every page is a Server Component that resolves
+auth/org context itself (`getAuthenticatedUser`/
+`resolveOrganizationContextForUser`), gates access through a pure,
+directly-testable `decideCompaniesConsoleAccess` (mirrors
+`decideDsrConsoleAccess`/`decideAgencyConsoleAccess` exactly), then
+calls the existing 2.1F-B handler functions
+(`handleListCompanies`/`handleGetCompany`/`handleCreateCompany`/
+`handleUpdateCompany`/`handleDeleteCompany`) **in-process** — no browser
+`fetch()` to `/api/v1/companies`, no new HTTP client, ADR-004 fully
+preserved. This reuses the real, unduplicated 2.1F RBAC check, mass-
+assignment allowlisting, and Idempotency-Key reservation/replay logic;
+mutations follow the established `"use client"` form → `"use server"`
+action → framework-independent `*-logic.ts` split (mirrors
+`file-dsr-logic.ts`/`create-client-org-logic.ts`). No technical
+incompatibility was found reusing the handlers this way — the only
+wrinkle is unwrapping a `NextResponse` (`.status`/`.json()`) instead of
+a plain return value, not a blocker.
+
+**Cursor pagination**: link-based (`?cursor=...`), not `EntityTable`'s
+`onLoadMore` client callback — a Server Component has nothing to wire
+that callback to without browser fetch, which would violate ADR-004.
+`EntityTable` needed **no change**: omitting `onLoadMore` already hides
+its Load More button entirely (already proven in 2.1G-A's own tests), so
+the page simply renders a plain `<Link>` "Load more" preserving the
+active `ownerId` filter alongside the new cursor.
+
+**Owner filter/selection — a real gap found during this step**: no
+existing tenancy/auth primitive returns other organization members'
+display names — `public.users` RLS is strictly self-scoped (`id =
+auth.uid()`, M1.2), so even an org_admin cannot read a teammate's
+email/`full_name` through the ordinary `withTenantContext` + RLS path a
+join would need. The new `owner-options.ts` returns only what IS
+legitimately visible — the org-scoped list of active member user ids
+(`memberships` RLS) — with **no name, no email**. The owner
+filter/select therefore shows raw user ids, a real, reported UX
+limitation, not silently worked around with a new migration/RLS
+policy/SECURITY DEFINER function (any of which would need separate
+explicit approval this step did not seek).
+
+**Delete UX**: a two-step disclosure (button reveals a confirm panel;
+both real, keyboard-reachable buttons) — no Dialog primitive exists and
+none was added. Copy says the company is removed from the active CRM
+and can be restored; it never says "permanently," "erase," or "GDPR."
+Soft-delete only — `deleteCompanyForResolvedContext` calls
+`handleDeleteCompany` alone; no `packages/compliance` import anywhere
+in `apps/web/app/companies/**`.
+
+**Styling**: plain CSS Modules (`companies.module.css`), no Tailwind/
+shadcn/Radix. Only `--primary`/`--font-sans` referenced from the real
+global tokens; everything else is a locally-scoped value, same
+discipline as `packages/ui`.
+
+**Tests**: 27 new (`apps/web/tests/companies-console.test.ts`) — access
+decision for all 6 roles, `listActiveOwnerOptions` (active-org-only,
+excludes removed memberships), create (mass-assignment/forged-org
+ignored, blank-name and non-numeric-employee-count rejected safely,
+unauthorized rejected, same-key replay reuses the created row with no
+duplicate insert, a new key creates a genuinely new row), update
+(touched field changes, untouched field round-trips its *existing*
+value rather than becoming null, an explicitly emptied nullable field
+becomes null, `org_viewer` forbidden, invalid owner surfaces a safe
+message never containing raw SQL/constraint text, same-key replay is
+idempotent), delete (`org_admin` success + subsequent 404, `org_member`
+forbidden, the row is confirmed still physically present with
+`deleted_at` set — never a hard delete), and security (pure agency
+actor denied at the access decision, unaffiliated user denied every
+mutation, a demoted actor's stale key cannot replay past a since-revoked
+membership). Deliberately does **not** re-test
+`handleListCompanies`/`handleGetCompany`'s own list/pagination/filter/
+404/tenancy behavior — `companies-api.test.ts` (22 tests, unmodified)
+already covers that exhaustively and these pages call those exact same
+functions with no additional logic beyond URL/param assembly;
+duplicating that suite here would test nothing new.
+
+**Full validation**: monorepo 842/842 (`ui` 21, database 284, auth 196,
+crm 87, tenancy 28, compliance 26, web 200 — includes the 27 new
+Companies UI tests plus the unmodified 22 `companies-api.test.ts` and
+every other pre-existing suite); migration-safety 31/31, **no new
+migration**; lint/typecheck/build clean across all 7 packages —
+critically, a real Next.js production build (not just `tsc`/`vitest`)
+now proves `packages/ui`'s `EntityTable` (including its CSS Modules
+import) compiles cleanly through Next's actual SWC bundler for the
+first time, closing the one integration gap 2.1G-A had explicitly left
+open; `git diff --check` clean; secret scan clean. One transient
+failure during regression was traced to a stray Postgres trigger left
+over from an interrupted, unrelated prior test run (the same class of
+issue recorded in the 2.1F-C entry above) — not caused by this step;
+removed, and a clean re-run confirmed all suites green.
+
+**Not part of this step**: no Contacts UI (2.1G-C), no final UI
+verification (2.1G-D), no new `packages/ui` component, no new
+permission, no schema/migration change, no staging/Production
+operation.
+
+**Remaining in Milestone 2.1**: 2.1G-C (Contacts UI), 2.1G-D (final UI/
+adversarial/visual verification). 2.1G and Milestone 2.1 as a whole
+remain **not** complete.
+
 ---
 
 ## Overall Phase 1 Recommendation

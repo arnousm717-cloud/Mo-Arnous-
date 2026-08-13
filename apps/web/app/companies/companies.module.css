@@ -1,0 +1,140 @@
+/*
+ * Milestone 2.1G-B. Plain CSS Modules only (locked decision) — no
+ * Tailwind/shadcn/Radix. Shared across the Companies feature's own small
+ * set of components (list page, forms, detail page) rather than one file
+ * per component, since these are all part of a single narrow feature, not
+ * a reusable design-system surface (that's packages/ui's job). Only the
+ * four real global theme tokens are referenced; everything else is a
+ * local custom property, same discipline as packages/ui/entity-table.
+ */
+
+.page {
+  font-family: var(--font-sans, inherit);
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.pageHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.section {
+  margin-bottom: 2rem;
+}
+
+.filterForm {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.field label {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.field input,
+.field select {
+  font-family: inherit;
+  font-size: 0.875rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
+  min-height: 44px;
+}
+
+.formError {
+  color: #b91c1c;
+  font-size: 0.875rem;
+  margin: 0 0 0.75rem 0;
+}
+
+.submitButton {
+  font-family: inherit;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  min-height: 44px;
+  border: 1px solid var(--primary, #d1d5db);
+  background: var(--primary, #f4f5f7);
+  color: var(--primary-foreground, #fff);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.submitButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.secondaryButton {
+  font-family: inherit;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  min-height: 44px;
+  border: 1px solid #d1d5db;
+  background: transparent;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.dangerButton {
+  font-family: inherit;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  min-height: 44px;
+  border: 1px solid #b91c1c;
+  color: #b91c1c;
+  background: transparent;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.detailFields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.detailFields dt {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.detailFields dd {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.9375rem;
+}
+
+.loadMoreLink {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.confirmPanel {
+  border: 1px solid #b91c1c;
+  border-radius: 0.25rem;
+  padding: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.confirmActions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { resolveRequestContext } from "@ai-revenue-os/auth";
 import { getOrganizationById } from "@ai-revenue-os/tenancy";
@@ -28,6 +29,9 @@ export default async function DashboardPage(): Promise<React.ReactElement> {
     <main>
       <h1>Welcome, {organization?.name ?? "there"}</h1>
       <p>Role: {context.roleKey}</p>
+      <nav>
+        <Link href="/companies">Companies</Link>
+      </nav>
       <form action={logoutAction}>
         <button type="submit">Log out</button>
       </form>
