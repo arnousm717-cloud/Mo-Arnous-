@@ -686,11 +686,111 @@ new + 1 net), compliance 26/26, full monorepo 566/566; migration-safety
 `git diff --check` clean; secret scan clean; diff scope exactly two files
 (the migration and its test file) — no incidental changes elsewhere.
 
-**Deployment status: staging and Production were NOT touched by this
-work.** Both still run the pre-fix code as of this writing — the PUBLIC-
-execute default and the NULL-unsafe guards remain live in Production
-until this migration is deployed there. Staging/Cloud deployment is
-separate, later work requiring its own explicit approval.
+**Deployment status (updated)**: staging has since received
+`20260812140000` via a normal, verified `db push` (both root causes
+confirmed closed there — see the staging verification report from that
+session). Production has **not** received the migration itself — instead,
+both root causes were closed there via a hand-applied, transaction-wrapped
+ACL/guard hotfix scoped to only the 13 functions that exist in Production
+today (2.1B/2.1C's own tables and functions are deliberately excluded,
+since deploying them wasn't in scope for the security fix). Production's
+migration history still shows `20260812120000` through `20260812140000`
+as pending — this is expected, not a defect: the hotfix was applied via
+direct SQL, not `db push`, so it never touched `schema_migrations`. When
+`20260812140000` eventually runs there for real (as part of deploying
+2.1B/2.1C together), every one of its statements affecting the 13
+already-hotfixed functions is idempotent and will no-op safely; its
+statements for the 3 contact-erasure functions and `set_updated_at` will
+correctly do real work for the first time, since `130000`/`120000` will
+have already run immediately before it in the same push.
+
+### 2.1D — Done (packages/crm implementation)
+
+`packages/crm` (new package, `database`/`auth` per `docs/02` §4's
+boundary table) implements Companies/Contacts create/get/list/update/
+soft-delete — domain logic only, no HTTP concerns, no new migration (the
+2.1B schema already covers everything this package needs).
+
+**Tenant context**: every function accepts an already-resolved
+`{ userId, organizationId, roleKey? }` and calls `withTenantContext` —
+`organizationId` is structurally never a mutation input (`CreateCompanyInput`/`CreateContactInput`
+have no such field at all), and every query still explicitly filters
+`organization_id = ctx.organizationId` in application SQL on top of RLS,
+matching `docs/08` §2's two-layer discipline.
+
+**Owner validation**: strict organization-scoped rule — `ownerId` is
+valid only if `null` or if it references a user with an **active**
+`memberships` row in exactly the caller's own organization. Agency-level
+membership alone never qualifies (`memberships.organization_id` is `NULL`
+for agency-scoped rows per ADR-005, so the query excludes them
+structurally). Shared between companies and contacts via
+`src/owner-validation.ts`, always run inside the same transaction as the
+write it guards. An existing `owner_id` is left alone if that membership
+later becomes inactive — only a *new* assignment/change re-validates.
+
+**Company name**: rejects empty/whitespace-only (a domain-only rule — no
+migration; the DB itself only enforces `NOT NULL`), trims before
+persistence.
+
+**Company relationship**: `companyId` is valid only if it resolves to a
+company that exists, belongs to the caller's org, and is not
+soft-deleted — all three failure modes collapse to the same
+`InvalidCompanyRelationshipError`, deliberately indistinguishable. An
+already-linked contact's `company_id` is left untouched if that company
+is later soft-deleted (no cascade, no FK change, matching the existing
+2.1B decision) — the restriction only applies to *new* assignments.
+
+**Contact identity invariant**: mirrors the database `CHECK` exactly
+(same non-whitespace regex). `updateContact` validates the **final**
+merged state (current row + patch), not just the patch in isolation — an
+existing contact with only `email` populated cannot have `email` nulled
+out unless the same update also supplies a non-empty `firstName`/`lastName`.
+
+**Email uniqueness**: not pre-checked as authoritative — the existing
+partial unique index (`contacts_org_active_email_idx`) remains the
+race-safe mechanism; `packages/crm` catches Postgres `23505` scoped to
+that exact index name (via the error's `constraint` field) and translates
+it to `DuplicateContactEmailError`, never swallowing an unrelated unique
+violation.
+
+**Pagination**: opaque base64url `{ createdAt, id }` cursor, `created_at
+DESC, id DESC` with `id` as a stable tie-breaker, `(created_at, id) <
+(cursor.createdAt, cursor.id)` as the continuation predicate, default
+limit 25 / max 100, fetch `limit + 1` to detect `hasMore` without a
+separate count query — the first concrete implementation of `docs/04` §1's
+documented convention in this repository, shared identically by
+`listCompanies`/`listContacts`.
+
+**Domain errors**: `ValidationError`, `DuplicateContactEmailError`,
+`InvalidCompanyRelationshipError`, `InvalidOwnerError` — no HTTP status
+codes. `getCompanyById`/`getContactById` return `null` identically for
+nonexistent, cross-org, and soft-deleted — no `Forbidden` error exists in
+this package at all, matching `getDataSubjectRequestById`'s own
+established precedent exactly.
+
+**Tests**: 87 (`pagination.test.ts` 14, `companies.test.ts` 27,
+`contacts.test.ts` 36, `tenancy.test.ts` 10) — real local Postgres, no
+mocking, covering create/get/list/update/soft-delete for both entities,
+owner validation (valid/nonexistent/cross-org/inactive-membership,
+existing-owner-persists-on-unrelated-update), company-relationship
+validation (valid/nonexistent/cross-org/soft-deleted, all
+indistinguishable), the identity-invariant final-state case, duplicate
+email (plain/case-insensitive/reusable-after-soft-delete/cross-org-allowed),
+cursor pagination (no duplicates/gaps across pages, filters), and
+cross-tenant adversarial coverage (read/update/soft-delete all rejected
+across orgs, forged `organizationId`-shaped input fields have no effect,
+a cross-org `companyId` cannot be used to bypass isolation).
+
+**Full validation**: monorepo 653/653 (database 271, auth 138, crm 87
+new, tenancy 28, compliance 26, web 103); migration-safety 29/29
+unchanged (no new migration); lint/typecheck/build clean across all 7
+packages; `git diff --check` clean; secret scan clean; diff scope exactly
+`packages/crm/` (new) and `pnpm-lock.yaml` (the expected new-workspace-package
+addition) — no incidental changes elsewhere.
+
+**Still open for Milestone 2.1**: 2.1E (RBAC keys), 2.1F (API routes +
+DSR route dispatch), 2.1G (UI), 2.1H (final adversarial/closeout).
+Milestone 2.1 is not closed.
 
 ---
 
