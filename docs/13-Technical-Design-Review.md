@@ -788,9 +788,78 @@ packages; `git diff --check` clean; secret scan clean; diff scope exactly
 `packages/crm/` (new) and `pnpm-lock.yaml` (the expected new-workspace-package
 addition) — no incidental changes elsewhere.
 
-**Still open for Milestone 2.1**: 2.1E (RBAC keys), 2.1F (API routes +
-DSR route dispatch), 2.1G (UI), 2.1H (final adversarial/closeout).
-Milestone 2.1 is not closed.
+**Still open for Milestone 2.1** (superseded below): ~~2.1E (RBAC
+keys)~~, 2.1F (API routes + DSR route dispatch), 2.1G (UI), 2.1H (final
+adversarial/closeout). Milestone 2.1 is not closed.
+
+### 2.1E — Done (CRM RBAC)
+
+Adds the 8 approved `PermissionKey` values to `packages/auth/src/permissions.ts`:
+`companies:read`/`create`/`update`/`delete`, `contacts:read`/`create`/`update`/`delete`.
+
+**Role matrix**: `org_admin` — all 8; `org_member` — read/create/update,
+no delete; `org_viewer` — read only; `agency_owner`/`agency_admin`/
+`portal_customer` — none. Matches the design approved in the 2.1E
+audit report exactly, re-confirmed against fresh reading of
+`docs/10-CLAUDE.md` §2 rather than assumed.
+
+**Agency-role decision**: no direct CRM grant for either agency-scoped
+role — structural, not just a policy choice. An agency-scoped `Actor`
+carries `agencyId`, not `organizationId`, in the general case, and no
+`agency_rollup_companies`/`agency_rollup_contacts` view exists yet to
+give agency roles a safe cross-org read path. An agency staffer who
+separately holds an actual org-scoped membership in a client org already
+gets CRM access through that org-scoped role — no new mechanism needed.
+
+**Delete-vs-GDPR**: `companies:delete`/`contacts:delete` authorize only
+the ordinary `UPDATE deleted_at = now()` soft-delete `packages/crm`
+exposes — never physical `DELETE`, never GDPR hard erasure, which
+remains governed exclusively by `data-subject-requests:execute` and is
+never coupled to these two keys (proven by a dedicated test asserting
+`org_member` holds `contacts:delete` = false and
+`data-subject-requests:execute` = false independently, and that no role
+other than `org_admin` ever holds either CRM delete key).
+
+**A required database migration, found during the audit and confirmed
+necessary during implementation**: `roles.permission_set` (a `jsonb`
+column) is asserted byte-identical to `PERMISSION_MATRIX` by
+`packages/auth/tests/permission-set-sync.test.ts`, which queries real
+local Postgres — adding the 8 keys to the TS matrix without a
+corresponding migration would have broken that test (confirmed
+empirically: it failed exactly as predicted before the migration was
+applied, then passed after). `packages/database/supabase/migrations/20260813100000_update_role_permission_sets_2_1e.sql`
+updates only the three roles whose entry actually changes
+(`org_admin`, `org_member`, `org_viewer`) via full-replacement `UPDATE`
+statements, mirroring the exact pattern of `20260807135700`/`20260810100400`
+— every pre-existing key for those roles is explicitly preserved
+alongside the new CRM ones, not merely appended. `agency_owner`/
+`agency_admin`/`portal_customer` rows are untouched (they gain nothing).
+
+**Tests**: `packages/auth/tests/permissions.test.ts` extended — 8 new
+keys added to the exhaustive (role × permission) matrix (independently
+hand-written `EXPECTED` values, never derived from `PERMISSION_MATRIX`
+itself), plus dedicated `describe` blocks for the CRM matrix per role,
+the delete-vs-DSR independence proof, agency-role zero-grant
+confirmation, and a full byte-for-byte regression check that all 14
+pre-2.1E permissions' expected values are unchanged. One pre-existing
+test needed a real fix, not just an addition: the "deny-by-default"
+sweep for `org_viewer` previously excluded only `organizations:read`
+from its "everything else denies" loop — it now also excludes
+`companies:read`/`contacts:read`, the two new grants that would
+otherwise have made that test fail (a legitimate consequence of the new
+grants, not a weakened assertion).
+
+**Full validation**: `packages/auth` 196/196 (was 138; +58 net — the
+permission-set-sync tests plus every new/extended permissions.test.ts
+case), `permission-set-sync.test.ts` passes against real local Postgres,
+migration-safety 30/30 (was 29 — the one new migration), monorepo
+712/712 (database 272 [+1, `migration-safety.test.ts` generating one
+test per migration file], auth 196, crm 87, tenancy 28, compliance 26,
+web 103); lint/typecheck/build clean across all 7 packages;
+`git diff --check` clean; secret scan clean.
+
+**Still open for Milestone 2.1**: 2.1F (API routes + DSR route dispatch),
+2.1G (UI), 2.1H (final adversarial/closeout). Milestone 2.1 is not closed.
 
 ---
 

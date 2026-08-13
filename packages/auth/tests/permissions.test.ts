@@ -19,6 +19,14 @@ const PERMISSIONS: PermissionKey[] = [
   "data-subject-requests:create",
   "data-subject-requests:read",
   "data-subject-requests:execute",
+  "companies:read",
+  "companies:create",
+  "companies:update",
+  "companies:delete",
+  "contacts:read",
+  "contacts:create",
+  "contacts:update",
+  "contacts:delete",
 ];
 
 /**
@@ -49,6 +57,18 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "data-subject-requests:create": false,
     "data-subject-requests:read": false,
     "data-subject-requests:execute": false,
+    // Milestone 2.1E: agency roles get zero direct CRM CRUD — no
+    // agency_rollup_companies/agency_rollup_contacts view exists yet
+    // (docs/10-CLAUDE.md §2), and an agency-scoped Actor carries agencyId,
+    // not organizationId.
+    "companies:read": false,
+    "companies:create": false,
+    "companies:update": false,
+    "companies:delete": false,
+    "contacts:read": false,
+    "contacts:create": false,
+    "contacts:update": false,
+    "contacts:delete": false,
   },
   agency_admin: {
     "organizations:read": false,
@@ -65,6 +85,14 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "data-subject-requests:create": false,
     "data-subject-requests:read": false,
     "data-subject-requests:execute": false,
+    "companies:read": false,
+    "companies:create": false,
+    "companies:update": false,
+    "companies:delete": false,
+    "contacts:read": false,
+    "contacts:create": false,
+    "contacts:update": false,
+    "contacts:delete": false,
   },
   org_admin: {
     "organizations:read": true,
@@ -82,6 +110,15 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "data-subject-requests:create": true,
     "data-subject-requests:read": true,
     "data-subject-requests:execute": true,
+    // Milestone 2.1E: org_admin gets all 8 CRM keys.
+    "companies:read": true,
+    "companies:create": true,
+    "companies:update": true,
+    "companies:delete": true,
+    "contacts:read": true,
+    "contacts:create": true,
+    "contacts:update": true,
+    "contacts:delete": true,
   },
   org_member: {
     "organizations:read": true,
@@ -98,6 +135,15 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "data-subject-requests:create": false,
     "data-subject-requests:read": false,
     "data-subject-requests:execute": false,
+    // Milestone 2.1E: read/create/update, no delete.
+    "companies:read": true,
+    "companies:create": true,
+    "companies:update": true,
+    "companies:delete": false,
+    "contacts:read": true,
+    "contacts:create": true,
+    "contacts:update": true,
+    "contacts:delete": false,
   },
   org_viewer: {
     "organizations:read": true,
@@ -114,6 +160,15 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "data-subject-requests:create": false,
     "data-subject-requests:read": false,
     "data-subject-requests:execute": false,
+    // Milestone 2.1E: read-only, no write of any kind.
+    "companies:read": true,
+    "companies:create": false,
+    "companies:update": false,
+    "companies:delete": false,
+    "contacts:read": true,
+    "contacts:create": false,
+    "contacts:update": false,
+    "contacts:delete": false,
   },
   portal_customer: {
     "organizations:read": false,
@@ -130,6 +185,14 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "data-subject-requests:create": false,
     "data-subject-requests:read": false,
     "data-subject-requests:execute": false,
+    "companies:read": false,
+    "companies:create": false,
+    "companies:update": false,
+    "companies:delete": false,
+    "contacts:read": false,
+    "contacts:create": false,
+    "contacts:update": false,
+    "contacts:delete": false,
   },
 };
 
@@ -220,10 +283,13 @@ describe("can(): the specific approved billing decision", () => {
 
 describe("can(): deny-by-default", () => {
   it("a permission key that exists in the union but isn't granted to a given role denies cleanly", () => {
-    // org_viewer has zero write-adjacent permissions granted at all.
+    // org_viewer has zero write-adjacent permissions granted at all — only
+    // its three read-only grants (organizations, companies, contacts) are
+    // excluded from this "everything else must deny" sweep.
     const actor = actorFor("org_viewer");
+    const readOnlyGrants: PermissionKey[] = ["organizations:read", "companies:read", "contacts:read"];
     for (const permission of PERMISSIONS) {
-      if (permission === "organizations:read") continue;
+      if (readOnlyGrants.includes(permission)) continue;
       expect(can(actor, permission)).toBe(false);
     }
   });
@@ -312,6 +378,148 @@ describe("can(): never throws, for any input shape", () => {
     for (const actor of edgeCases) {
       for (const permission of PERMISSIONS) {
         expect(() => can(actor, permission)).not.toThrow();
+      }
+    }
+  });
+});
+
+describe("can(): Milestone 2.1E — CRM permissions (companies:*, contacts:*)", () => {
+  it("org_admin is granted all 8 CRM permissions", () => {
+    const actor = actorFor("org_admin");
+    for (const permission of [
+      "companies:read",
+      "companies:create",
+      "companies:update",
+      "companies:delete",
+      "contacts:read",
+      "contacts:create",
+      "contacts:update",
+      "contacts:delete",
+    ] as const) {
+      expect(can(actor, permission)).toBe(true);
+    }
+  });
+
+  it("org_member cannot soft-delete through RBAC — read/create/update granted, delete denied", () => {
+    const actor = actorFor("org_member");
+    expect(can(actor, "companies:read")).toBe(true);
+    expect(can(actor, "companies:create")).toBe(true);
+    expect(can(actor, "companies:update")).toBe(true);
+    expect(can(actor, "companies:delete")).toBe(false);
+    expect(can(actor, "contacts:read")).toBe(true);
+    expect(can(actor, "contacts:create")).toBe(true);
+    expect(can(actor, "contacts:update")).toBe(true);
+    expect(can(actor, "contacts:delete")).toBe(false);
+  });
+
+  it("org_viewer cannot create, update, or delete either resource — read only", () => {
+    const actor = actorFor("org_viewer");
+    expect(can(actor, "companies:read")).toBe(true);
+    expect(can(actor, "contacts:read")).toBe(true);
+    for (const permission of [
+      "companies:create",
+      "companies:update",
+      "companies:delete",
+      "contacts:create",
+      "contacts:update",
+      "contacts:delete",
+    ] as const) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("agency_owner and agency_admin do not acquire direct client-org CRM CRUD — all 8 keys denied for both", () => {
+    for (const role of ["agency_owner", "agency_admin"] as const) {
+      const actor = actorFor(role);
+      for (const permission of [
+        "companies:read",
+        "companies:create",
+        "companies:update",
+        "companies:delete",
+        "contacts:read",
+        "contacts:create",
+        "contacts:update",
+        "contacts:delete",
+      ] as const) {
+        expect(can(actor, permission)).toBe(false);
+      }
+    }
+  });
+
+  it("portal_customer is denied every CRM permission", () => {
+    const actor = actorFor("portal_customer");
+    for (const permission of [
+      "companies:read",
+      "companies:create",
+      "companies:update",
+      "companies:delete",
+      "contacts:read",
+      "contacts:create",
+      "contacts:update",
+      "contacts:delete",
+    ] as const) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("granting a CRM permission does not scope-leak: an org_admin's CRM grant still respects an explicit mismatched resource.organizationId", () => {
+    const actor = actorFor("org_admin");
+    const someoneElsesOrgId = randomUUID();
+    expect(can(actor, "companies:delete", { organizationId: someoneElsesOrgId })).toBe(false);
+    expect(can(actor, "companies:delete", { organizationId: actor.organizationId })).toBe(true);
+  });
+});
+
+describe("can(): CRM delete permissions are independent from data-subject-requests:execute", () => {
+  it("org_admin holds both, but they are two separately-granted keys, not one implying the other", () => {
+    const actor = actorFor("org_admin");
+    expect(can(actor, "contacts:delete")).toBe(true);
+    expect(can(actor, "data-subject-requests:execute")).toBe(true);
+  });
+
+  it("a role can hold contacts:delete without holding data-subject-requests:execute — org_member proves the two are not coupled", () => {
+    const actor = actorFor("org_member");
+    expect(can(actor, "contacts:delete")).toBe(false);
+    expect(can(actor, "data-subject-requests:execute")).toBe(false);
+    // The absence is independent, not a derived consequence — confirmed by
+    // checking org_viewer too, which also lacks both, for a different
+    // reason (read-only, not merely non-admin).
+    const viewer = actorFor("org_viewer");
+    expect(can(viewer, "contacts:delete")).toBe(false);
+    expect(can(viewer, "data-subject-requests:execute")).toBe(false);
+  });
+
+  it("no role is granted contacts:delete/companies:delete without also being org_admin — confirms delete is not accidentally broader than intended", () => {
+    for (const role of ROLES) {
+      if (role === "org_admin") continue;
+      const actor = actorFor(role);
+      expect(can(actor, "contacts:delete")).toBe(false);
+      expect(can(actor, "companies:delete")).toBe(false);
+    }
+  });
+});
+
+describe("can(): Milestone 2.1E — pre-existing 14 permissions unaffected", () => {
+  it("every pre-2.1E permission's expected value is unchanged for every role", () => {
+    const preExisting: PermissionKey[] = [
+      "organizations:read",
+      "organizations:list-clients",
+      "organizations:create-client",
+      "organizations:manage-billing",
+      "organizations:manage-users",
+      "organizations:manage-settings",
+      "agencies:read",
+      "agencies:manage-branding",
+      "agencies:manage-billing",
+      "agencies:manage-domains",
+      "consent:record",
+      "data-subject-requests:create",
+      "data-subject-requests:read",
+      "data-subject-requests:execute",
+    ];
+    for (const role of ROLES) {
+      for (const permission of preExisting) {
+        expect(can(actorFor(role), permission)).toBe(EXPECTED[role][permission]);
       }
     }
   });

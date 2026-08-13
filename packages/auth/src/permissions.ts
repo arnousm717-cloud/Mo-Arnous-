@@ -35,7 +35,15 @@ export type PermissionKey =
   | "consent:record"
   | "data-subject-requests:create"
   | "data-subject-requests:read"
-  | "data-subject-requests:execute";
+  | "data-subject-requests:execute"
+  | "companies:read"
+  | "companies:create"
+  | "companies:update"
+  | "companies:delete"
+  | "contacts:read"
+  | "contacts:create"
+  | "contacts:update"
+  | "contacts:delete";
 
 export interface Actor {
   userId: string;
@@ -60,11 +68,11 @@ type RoleKey = "agency_owner" | "agency_admin" | "org_admin" | "org_member" | "o
 type PermissionGrants = Partial<Record<PermissionKey, true>>;
 
 /**
- * The real permission matrix (M1.5's own stated deliverable). Scoped to
- * what M1.1-M1.4 actually built — no CRM permissions exist here yet
- * because no CRM tables exist yet. Absence of a key is the deny; there is
- * no explicit `false` anywhere in this object because there doesn't need
- * to be one — can() treats "not present" and "present as false" identically.
+ * The real permission matrix (M1.5's own stated deliverable, extended in
+ * Milestone 2.1E for the 8 companies:* and contacts:* keys). Absence of a key
+ * is the deny; there is no explicit `false` anywhere in this object
+ * because there doesn't need to be one — can() treats "not present" and
+ * "present as false" identically.
  *
  * agencies:manage-billing is agency_owner only — a deliberate decision,
  * not an oversight (docs/08 §3 already stated "no billing/plan changes"
@@ -74,6 +82,23 @@ type PermissionGrants = Partial<Record<PermissionKey, true>>;
  * billing; agency-scoped roles never receive it under this key, because
  * their billing authority (when they have any) is agencies:manage-billing
  * instead. The two keys are intentionally never granted to the same role.
+ *
+ * companies:* and contacts:* (Milestone 2.1E, docs/13 "Milestone 2.1"
+ * Detailed design): agency_owner/agency_admin deliberately get none of
+ * these eight, even though they otherwise hold broad agency-wide grants
+ * elsewhere in this table — an agency-scoped Actor carries agencyId, not
+ * organizationId, and there is no agency_rollup_companies/
+ * agency_rollup_contacts view yet (docs/10-CLAUDE.md §2: agency cross-org
+ * access only through named roll-up views, never a direct grant). An
+ * agency staffer who separately holds an actual org-scoped membership in
+ * a client org already gets CRM access through that org-scoped role's own
+ * Actor — no new mechanism needed for that case.
+ * companies:delete/contacts:delete authorize ONLY the ordinary
+ * UPDATE deleted_at = now() soft-delete packages/crm exposes — never
+ * physical DELETE, never GDPR hard erasure. That remains governed
+ * exclusively by data-subject-requests:execute, a wholly separate
+ * permission checked by a wholly separate route; the two are never
+ * coupled here or anywhere else.
  */
 export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
   agency_owner: {
@@ -103,12 +128,28 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "data-subject-requests:create": true,
     "data-subject-requests:read": true,
     "data-subject-requests:execute": true,
+    "companies:read": true,
+    "companies:create": true,
+    "companies:update": true,
+    "companies:delete": true,
+    "contacts:read": true,
+    "contacts:create": true,
+    "contacts:update": true,
+    "contacts:delete": true,
   },
   org_member: {
     "organizations:read": true,
+    "companies:read": true,
+    "companies:create": true,
+    "companies:update": true,
+    "contacts:read": true,
+    "contacts:create": true,
+    "contacts:update": true,
   },
   org_viewer: {
     "organizations:read": true,
+    "companies:read": true,
+    "contacts:read": true,
   },
   portal_customer: {},
 };

@@ -31,7 +31,7 @@ Three pillars, not two:
 | `org_viewer` | Single organization | Read-only across CRM/reports; no write actions |
 | `portal_customer` | Own portal scope only | Proposal/document/status visibility, scoped chat — no CRM access whatsoever |
 
-- Permission checks are resource + action pairs (`contacts:read`, `contacts:write`, `deals:write`, `proposals:send`, `agents:trigger`, `settings:billing`), not coarse role checks scattered through the codebase — the RBAC facade (`can(actor, action, resource)`) is the single place this matrix is evaluated.
+- Permission checks are resource + action pairs (`contacts:read`, `contacts:create`, `contacts:update`, `contacts:delete`, `deals:write`, `proposals:send`, `agents:trigger`, `settings:billing`), not coarse role checks scattered through the codebase — the RBAC facade (`can(actor, action, resource)`) is the single place this matrix is evaluated. Action verbs are fine-grained per resource (`create`/`update`/`delete`, not a single catch-all `write`) — `packages/auth/src/permissions.ts`'s actual `PERMISSION_MATRIX` is the authoritative convention; this list is illustrative only.
 - AI agents carry no standing permission beyond what the triggering user/organization context already grants — a tool call an agent makes is checked identically to the equivalent human action (`05-AI-Agent-Architecture.md` §1), **and consequential tools additionally require the human-approval gate described in §2** — RBAC scoping and approval gating are independent controls, both required where applicable, not substitutes for each other.
 - API keys carry their own scoped permission subset independent of the issuing user's role, so a key can be handed to a third party without over-granting.
 
@@ -57,10 +57,20 @@ Two roles operate agency-wide (`agency_owner`, `agency_admin`); four operate wit
 | `data-subject-requests:create` (M1.6) | — | — | ✅ | — | — | — |
 | `data-subject-requests:read` (M1.6) | — | — | ✅ | — | — | — |
 | `data-subject-requests:execute` (M1.6) | — | — | ✅ | — | — | — |
+| `companies:read` (2.1E) | — | — | ✅ | ✅ | ✅ | — |
+| `companies:create` (2.1E) | — | — | ✅ | ✅ | — | — |
+| `companies:update` (2.1E) | — | — | ✅ | ✅ | — | — |
+| `companies:delete` (2.1E) | — | — | ✅ | — | — | — |
+| `contacts:read` (2.1E) | — | — | ✅ | ✅ | ✅ | — |
+| `contacts:create` (2.1E) | — | — | ✅ | ✅ | — | — |
+| `contacts:update` (2.1E) | — | — | ✅ | ✅ | — | — |
+| `contacts:delete` (2.1E) | — | — | ✅ | — | — | — |
 
 The four M1.6 rows are `org_admin`-only by explicit decision — neither agency-scoped role gets any compliance-data access yet, even though they otherwise hold broad agency-wide grants elsewhere in this table (`docs/12-Implementation-Milestones.md` M1.6). This is a deliberate scope narrowing, not an oversight: agency-facing compliance workflows (e.g., an agency admin filing erasure requests on behalf of a client org) are real future scope but were never designed as part of M1.6, so extending access there now would be granting a permission ahead of the workflow it's meant to support.
 
-`agencies:manage-billing` and `organizations:manage-billing` are **never granted to the same role** — an agency's own billing relationship and a standalone organization's own billing relationship are different resources with different owners, even though the English word "billing" is the same in both rows. `agency_admin` explicitly does not receive `agencies:manage-billing` (a deliberate decision, not an oversight — matches this table's own pre-M1.5 "no billing/plan changes" note, now enforced rather than only documented). The full matrix, including CRM-adjacent permissions that don't exist as enforceable actions yet (no CRM tables exist as of M1.5), lives in `packages/auth/src/permissions.ts` — this table mirrors it for the scope actually built so far and must be kept in sync as new permissions are added there.
+**The eight `companies:*`/`contacts:*` rows (Milestone 2.1E, `docs/13-Technical-Design-Review.md` "Milestone 2.1" Detailed design)** follow the same shape as every other resource in this table: `org_admin` gets full CRUD; `org_member` gets read/create/update but not `delete`; `org_viewer` gets `read` only; `portal_customer` gets none (no CRM access whatsoever, per this table's own scope row above). **Neither agency-scoped role receives any of the eight**, for a structural reason, not merely a policy choice — an agency-scoped Actor is built from agency context alone and carries no `organizationId` in the general case, and no `agency_rollup_companies`/`agency_rollup_contacts` view exists yet to give agency roles a safe, explicit cross-org read path (the agency-cross-org rule stated in `docs/10-CLAUDE.md` §2: access only through named roll-up views, never a direct grant). An agency staffer who separately holds an actual org-scoped membership in a client organization already gets CRM access through that org-scoped role, not through their agency role. `companies:delete`/`contacts:delete` authorize only the ordinary `deleted_at`-setting soft-delete described in `docs/03-Database-Architecture.md`'s deletion model — never physical deletion, never the GDPR hard-erasure cascade, which remains governed exclusively by `data-subject-requests:execute` and is never coupled to these two keys.
+
+`agencies:manage-billing` and `organizations:manage-billing` are **never granted to the same role** — an agency's own billing relationship and a standalone organization's own billing relationship are different resources with different owners, even though the English word "billing" is the same in both rows. `agency_admin` explicitly does not receive `agencies:manage-billing` (a deliberate decision, not an oversight — matches this table's own pre-M1.5 "no billing/plan changes" note, now enforced rather than only documented). The full matrix lives in `packages/auth/src/permissions.ts` — this table mirrors it for the scope actually built so far and must be kept in sync as new permissions are added there.
 
 ## 4. Encryption
 
