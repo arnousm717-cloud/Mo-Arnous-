@@ -1130,6 +1130,87 @@ no staging/Production operation.
 **Remaining in Milestone 2.1**: 2.1F-D (full API/adversarial verification
 pass). Milestone 2.1 and 2.1F as a whole are still **not** complete.
 
+### 2.1G-A — Done (UI foundation: packages/ui + EntityTable)
+
+Preceded by a fresh UI audit/design report (2.1G) that found: no
+`EntityTable` anywhere in the codebase (`docs/12-Implementation-
+Milestones.md` had already named this as deferred, separate work); no
+design-system code at all despite `docs/07-UI-UX-System.md`'s full
+target (Tailwind/shadcn/Radix are absent from every `package.json` in
+the repo); `packages/ui` already reserved as a package boundary in
+`docs/02-Software-Architecture.md` §4 but never created; and a real
+architectural tension between ADR-004 (first-party UI queries tenant
+data directly, never via `/api/v1/*`) and a literal reading of "use the
+2.1F API" for a future API-client layer — resolved by locking Server
+Components/Actions to continue the ADR-004 pattern, reusing 2.1F
+handler/domain logic in-process rather than a network hop, deferred to
+2.1G-B/C. This step implements only the UI foundation those later steps
+will build on.
+
+**`packages/ui`** created — the reserved-but-unbuilt boundary from
+docs/02 §4, not a new package invented for "a handful of utilities."
+Structure mirrors every existing `packages/*` exactly (`exports`,
+`typecheck`/`lint`/`test` scripts, shared `@ai-revenue-os/config`
+tsconfig/eslint). `react` is a `peerDependency` (a first for this repo,
+since no other package renders React) so the consuming app's own React
+instance is what actually renders it.
+
+**`EntityTable`** (`packages/ui/src/entity-table.tsx`) — the smallest
+component satisfying the locked contract: `columns`/`rows`/`getRowId`,
+`state` (`loading`/`empty`/`error`/`ready`), `emptyMessage`/
+`errorMessage`, `rowActions`, and cursor-only pagination
+(`hasMore`/`isLoadingMore`/`onLoadMore`/`loadMoreLabel`) — no sorting,
+inline editing, saved views, or bulk actions (docs/07 §5's full vision),
+deliberately deferred until a second real consumer exists to prove the
+abstraction against. Presentation only: no data fetching, no
+organization-context resolution, no `can()`, no idempotency, no row-
+content logging — verified by the absence of any `@ai-revenue-os/auth`/
+`database`/`crm` import anywhere in the package.
+
+**Styling**: plain CSS Modules (`entity-table.module.css`) — **no
+Tailwind, shadcn/ui, Radix, or any other UI/component framework was
+introduced**, per the locked decision. Only the two already-implemented
+global theme tokens are referenced (`--font-sans`, `--primary`); every
+other value is a `--entity-table-*` custom property scoped locally to
+this file, explicitly commented as local-only rather than implying
+docs/07's full token set is wired up globally (it is not). Responsive
+strategy is horizontal scroll (not a card-per-row degradation), chosen
+specifically to avoid a second rendering path duplicating each column's
+`render()` output — documented inline in the CSS file.
+
+**Tests**: 21, in `packages/ui/tests/entity-table.test.tsx`, using
+`react-dom/server`'s `renderToStaticMarkup` — bundled with `react-dom`,
+which the package needs regardless, so this added **zero new
+dependencies**. Covers ready/empty/loading/error rendering, column
+`render()` mapping, `rowActions` presence/absence, and every Load-More
+button state (present/hidden/disabled/labeled) across `hasMore`/
+`isLoadingMore` combinations. **Accepted testing limitation, recorded
+here rather than worked around**: this repository has no `jsdom`/
+`@testing-library/react`/`happy-dom`/Playwright anywhere in its
+dependency tree, and none was added in this step (explicitly locked).
+`renderToStaticMarkup` proves real React output for every state and
+prop combination, but produces static markup with no attached event
+listeners — it cannot verify that clicking the rendered Load More
+`<button>` actually invokes the `onLoadMore` callback. That specific
+gap remains open, by explicit decision, not by oversight.
+
+**Full validation**: monorepo 815/815 (`ui` 21 new, database 284, auth
+196, crm 87, tenancy 28, compliance 26, web 173 — all pre-existing
+suites unchanged); migration-safety 31/31, **no new migration**; lint/
+typecheck/build clean across all 7 packages; `git diff --check` clean;
+secret scan clean.
+
+**Not part of this step**: no Companies UI (2.1G-B), no Contacts UI
+(2.1G-C), no final UI verification (2.1G-D), no `apps/web` change at
+all (nothing yet imports `EntityTable` — real Next.js build-pipeline
+integration is proven for the first time in 2.1G-B), no new dependency
+of any kind.
+
+**Remaining in Milestone 2.1**: 2.1F-D (already done, see above), 2.1G-B
+(Companies UI), 2.1G-C (Contacts UI), 2.1G-D (final UI/adversarial/
+visual verification). 2.1G and Milestone 2.1 as a whole remain **not**
+complete.
+
 ---
 
 ## Overall Phase 1 Recommendation

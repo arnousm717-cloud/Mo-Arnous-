@@ -84,7 +84,7 @@ Each `packages/*` module owns one bounded context and exposes a narrow public in
 | `auth` | Identity, sessions, RBAC/permission matrix, portal session auth | `database` |
 | `tenancy` | Agency→organization hierarchy rules, membership/invitation lifecycle, brand-theme inheritance and validation, custom-domain verification | `database`, `auth` |
 | `compliance` | Consent, deletion/export orchestration, audit logging, retention | `database`, `auth` |
-| `ui` | Design system components, theme tokens | — |
+| `ui` | Design system components, theme tokens. **Implemented as of Milestone 2.1G-A**, initial scope only: `EntityTable` (columns/rows/loading/empty/error/row-actions/cursor-pagination), plain CSS Modules. Not yet implemented: Tailwind, shadcn/ui, Radix, or any other `docs/07-UI-UX-System.md` primitive/token beyond the four already emitted by `theme-css.ts` (`--primary`/`--secondary`/`--accent`/`--font-sans`) — docs/07 remains the longer-term target, not a description of current scope | — |
 | `crm` | Companies/contacts/deals/pipeline business rules — stage transitions, deal validation, activity logic | `database`, `auth` |
 | `intelligence` | Visitor identification logic, enrichment orchestration, lead-scoring engine (rules-based + agent-assisted blending) | `database`, `crm` |
 | `revenue` | Proposal generation rules, revenue event aggregation, subscription/billing orchestration; also serves the read-only proposal/document access the Customer Portal needs | `database`, `crm` |
