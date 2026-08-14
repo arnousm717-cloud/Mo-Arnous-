@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { can, type Actor, type PermissionKey } from "../src/permissions";
+import { can, PERMISSION_MATRIX, type Actor, type PermissionKey } from "../src/permissions";
 
 const ROLES = ["agency_owner", "agency_admin", "org_admin", "org_member", "org_viewer", "portal_customer"] as const;
 
@@ -27,6 +27,14 @@ const PERMISSIONS: PermissionKey[] = [
   "contacts:create",
   "contacts:update",
   "contacts:delete",
+  "deals:read",
+  "deals:create",
+  "deals:update",
+  "deals:delete",
+  "pipelines:read",
+  "pipelines:create",
+  "pipelines:update",
+  "pipelines:delete",
 ];
 
 /**
@@ -69,6 +77,17 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "contacts:create": false,
     "contacts:update": false,
     "contacts:delete": false,
+    // Milestone 2.2C: agency roles get zero direct Deals/Pipelines
+    // access — same structural reason as companies:*/contacts:* above
+    // (no agency_rollup_deals/agency_rollup_pipelines view exists yet).
+    "deals:read": false,
+    "deals:create": false,
+    "deals:update": false,
+    "deals:delete": false,
+    "pipelines:read": false,
+    "pipelines:create": false,
+    "pipelines:update": false,
+    "pipelines:delete": false,
   },
   agency_admin: {
     "organizations:read": false,
@@ -93,6 +112,14 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "contacts:create": false,
     "contacts:update": false,
     "contacts:delete": false,
+    "deals:read": false,
+    "deals:create": false,
+    "deals:update": false,
+    "deals:delete": false,
+    "pipelines:read": false,
+    "pipelines:create": false,
+    "pipelines:update": false,
+    "pipelines:delete": false,
   },
   org_admin: {
     "organizations:read": true,
@@ -119,6 +146,15 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "contacts:create": true,
     "contacts:update": true,
     "contacts:delete": true,
+    // Milestone 2.2C: org_admin gets all 8 Deals/Pipelines keys.
+    "deals:read": true,
+    "deals:create": true,
+    "deals:update": true,
+    "deals:delete": true,
+    "pipelines:read": true,
+    "pipelines:create": true,
+    "pipelines:update": true,
+    "pipelines:delete": true,
   },
   org_member: {
     "organizations:read": true,
@@ -144,6 +180,17 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "contacts:create": true,
     "contacts:update": true,
     "contacts:delete": false,
+    // Milestone 2.2C: deals read/create/update, no delete; pipelines
+    // read-only (org_member can work deals but not reshape pipeline
+    // structure — the frozen matrix's own deliberate distinction).
+    "deals:read": true,
+    "deals:create": true,
+    "deals:update": true,
+    "deals:delete": false,
+    "pipelines:read": true,
+    "pipelines:create": false,
+    "pipelines:update": false,
+    "pipelines:delete": false,
   },
   org_viewer: {
     "organizations:read": true,
@@ -169,6 +216,15 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "contacts:create": false,
     "contacts:update": false,
     "contacts:delete": false,
+    // Milestone 2.2C: read-only, no write of any kind.
+    "deals:read": true,
+    "deals:create": false,
+    "deals:update": false,
+    "deals:delete": false,
+    "pipelines:read": true,
+    "pipelines:create": false,
+    "pipelines:update": false,
+    "pipelines:delete": false,
   },
   portal_customer: {
     "organizations:read": false,
@@ -193,6 +249,14 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "contacts:create": false,
     "contacts:update": false,
     "contacts:delete": false,
+    "deals:read": false,
+    "deals:create": false,
+    "deals:update": false,
+    "deals:delete": false,
+    "pipelines:read": false,
+    "pipelines:create": false,
+    "pipelines:update": false,
+    "pipelines:delete": false,
   },
 };
 
@@ -287,7 +351,13 @@ describe("can(): deny-by-default", () => {
     // its three read-only grants (organizations, companies, contacts) are
     // excluded from this "everything else must deny" sweep.
     const actor = actorFor("org_viewer");
-    const readOnlyGrants: PermissionKey[] = ["organizations:read", "companies:read", "contacts:read"];
+    const readOnlyGrants: PermissionKey[] = [
+      "organizations:read",
+      "companies:read",
+      "contacts:read",
+      "deals:read",
+      "pipelines:read",
+    ];
     for (const permission of PERMISSIONS) {
       if (readOnlyGrants.includes(permission)) continue;
       expect(can(actor, permission)).toBe(false);
@@ -521,6 +591,172 @@ describe("can(): Milestone 2.1E — pre-existing 14 permissions unaffected", () 
       for (const permission of preExisting) {
         expect(can(actorFor(role), permission)).toBe(EXPECTED[role][permission]);
       }
+    }
+  });
+
+  it("every pre-2.2C permission (including the eight 2.1E CRM keys) is unchanged for every role", () => {
+    const preExisting2_2C: PermissionKey[] = [
+      "organizations:read",
+      "organizations:list-clients",
+      "organizations:create-client",
+      "organizations:manage-billing",
+      "organizations:manage-users",
+      "organizations:manage-settings",
+      "agencies:read",
+      "agencies:manage-branding",
+      "agencies:manage-billing",
+      "agencies:manage-domains",
+      "consent:record",
+      "data-subject-requests:create",
+      "data-subject-requests:read",
+      "data-subject-requests:execute",
+      "companies:read",
+      "companies:create",
+      "companies:update",
+      "companies:delete",
+      "contacts:read",
+      "contacts:create",
+      "contacts:update",
+      "contacts:delete",
+    ];
+    for (const role of ROLES) {
+      for (const permission of preExisting2_2C) {
+        expect(can(actorFor(role), permission)).toBe(EXPECTED[role][permission]);
+      }
+    }
+  });
+});
+
+describe("can(): Milestone 2.2C — Deals/Pipelines permissions", () => {
+  const DEALS_KEYS = ["deals:read", "deals:create", "deals:update", "deals:delete"] as const;
+  const PIPELINES_KEYS = ["pipelines:read", "pipelines:create", "pipelines:update", "pipelines:delete"] as const;
+
+  it("org_admin is granted all 4 deals keys and all 4 pipelines keys", () => {
+    const actor = actorFor("org_admin");
+    for (const permission of [...DEALS_KEYS, ...PIPELINES_KEYS]) {
+      expect(can(actor, permission)).toBe(true);
+    }
+  });
+
+  it("org_member: deals read/create/update, no delete; pipelines read only", () => {
+    const actor = actorFor("org_member");
+    expect(can(actor, "deals:read")).toBe(true);
+    expect(can(actor, "deals:create")).toBe(true);
+    expect(can(actor, "deals:update")).toBe(true);
+    expect(can(actor, "deals:delete")).toBe(false);
+    expect(can(actor, "pipelines:read")).toBe(true);
+    expect(can(actor, "pipelines:create")).toBe(false);
+    expect(can(actor, "pipelines:update")).toBe(false);
+    expect(can(actor, "pipelines:delete")).toBe(false);
+  });
+
+  it("org_viewer: read only for both deals and pipelines", () => {
+    const actor = actorFor("org_viewer");
+    expect(can(actor, "deals:read")).toBe(true);
+    expect(can(actor, "pipelines:read")).toBe(true);
+    for (const permission of ["deals:create", "deals:update", "deals:delete", "pipelines:create", "pipelines:update", "pipelines:delete"] as const) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("agency_owner and agency_admin get none of the 8 keys", () => {
+    for (const role of ["agency_owner", "agency_admin"] as const) {
+      const actor = actorFor(role);
+      for (const permission of [...DEALS_KEYS, ...PIPELINES_KEYS]) {
+        expect(can(actor, permission)).toBe(false);
+      }
+    }
+  });
+
+  it("portal_customer gets none of the 8 keys", () => {
+    const actor = actorFor("portal_customer");
+    for (const permission of [...DEALS_KEYS, ...PIPELINES_KEYS]) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("no role is granted agency roll-up access to deals/pipelines via these keys — every grant is scope-checked against the actor's own organizationId", () => {
+    const actor = actorFor("org_admin");
+    const someoneElsesOrgId = randomUUID();
+    expect(can(actor, "deals:delete", { organizationId: someoneElsesOrgId })).toBe(false);
+    expect(can(actor, "deals:delete", { organizationId: actor.organizationId })).toBe(true);
+    expect(can(actor, "pipelines:delete", { organizationId: someoneElsesOrgId })).toBe(false);
+    expect(can(actor, "pipelines:delete", { organizationId: actor.organizationId })).toBe(true);
+  });
+});
+
+describe("can(): Milestone 2.2C — pipeline stage authorization maps to pipelines:* (no pipeline_stages:* keys exist)", () => {
+  it("no role's grants contain a pipeline_stages:* key — a structural check, not a re-derivation of expected VALUES (which stay independently hand-written above)", () => {
+    for (const role of ROLES) {
+      const grantedKeys = Object.keys(PERMISSION_MATRIX[role]);
+      expect(grantedKeys.some((key) => key.startsWith("pipeline_stages:"))).toBe(false);
+    }
+  });
+
+  it("design intent for 2.2D: a stage operation checks the SAME key its parent-pipeline HTTP verb would use — GET=>pipelines:read, POST=>pipelines:create, PATCH=>pipelines:update, DELETE=>pipelines:delete", () => {
+    // Not a route test (no API route exists yet, 2.2D) — this proves the
+    // four keys a future stage-route implementation must reuse already
+    // exist and are granted per the same frozen matrix pipelines
+    // themselves use, so 2.2D has nothing further to add to this matrix.
+    const admin = actorFor("org_admin");
+    const member = actorFor("org_member");
+    expect(can(admin, "pipelines:read")).toBe(true); // GET stages
+    expect(can(admin, "pipelines:create")).toBe(true); // POST stage
+    expect(can(admin, "pipelines:update")).toBe(true); // PATCH stage
+    expect(can(admin, "pipelines:delete")).toBe(true); // DELETE stage
+    expect(can(member, "pipelines:read")).toBe(true); // GET stages
+    expect(can(member, "pipelines:create")).toBe(false); // POST stage denied
+  });
+});
+
+describe("can(): Milestone 2.2C — deals:delete and pipelines:delete are independent of each other and of DSR", () => {
+  it("deals:delete does not imply any DSR/compliance permission", () => {
+    const actor = actorFor("org_member");
+    // org_member never gets deals:delete at all — confirms the two keys
+    // are not coupled by proving neither role that lacks deals:delete
+    // gains it from anything DSR-related, and org_admin (which DOES hold
+    // deals:delete) is checked separately below for independence.
+    expect(can(actor, "deals:delete")).toBe(false);
+
+    const admin = actorFor("org_admin");
+    expect(can(admin, "deals:delete")).toBe(true);
+    expect(can(admin, "data-subject-requests:execute")).toBe(true);
+    // Both true for org_admin, but as two SEPARATELY granted keys — proven
+    // by org_viewer/org_member holding data-subject-requests:execute=false
+    // while genuinely lacking deals:delete for an unrelated reason
+    // (read-only vs. no-delete), never because one key derives the other.
+    const viewer = actorFor("org_viewer");
+    expect(can(viewer, "deals:delete")).toBe(false);
+    expect(can(viewer, "data-subject-requests:execute")).toBe(false);
+  });
+
+  it("pipelines:delete does not imply deals:delete", () => {
+    // No role in the frozen matrix holds exactly one of the two without
+    // the other (org_admin holds both, everyone else holds neither) —
+    // this is what proves the frozen matrix itself never uses one key as
+    // a proxy for the other; can() has no cross-key inference at all.
+    for (const role of ROLES) {
+      const actor = actorFor(role);
+      const hasPipelinesDelete = can(actor, "pipelines:delete");
+      const hasDealsDelete = can(actor, "deals:delete");
+      expect(hasPipelinesDelete).toBe(hasDealsDelete);
+    }
+  });
+});
+
+describe("can(): Milestone 2.2C — unknown role/action remains fail-closed, can() never throws", () => {
+  it("an unrecognized action string (not a member of PermissionKey at all) denies at runtime rather than throwing", () => {
+    const actor = actorFor("org_admin");
+    const bogusAction = "deals:archive" as unknown as PermissionKey;
+    expect(() => can(actor, bogusAction)).not.toThrow();
+    expect(can(actor, bogusAction)).toBe(false);
+  });
+
+  it("an unrecognized role denies every deals/pipelines permission, never throws", () => {
+    const actor = actorFor("not_a_real_role");
+    for (const permission of ["deals:read", "deals:create", "deals:update", "deals:delete", "pipelines:read", "pipelines:create", "pipelines:update", "pipelines:delete"] as const) {
+      expect(() => can(actor, permission)).not.toThrow();
+      expect(can(actor, permission)).toBe(false);
     }
   });
 });

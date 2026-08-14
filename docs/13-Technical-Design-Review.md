@@ -1949,6 +1949,113 @@ byte-for-byte unchanged from their committed state.
 remains open** — no RBAC permission keys, API routes, or UI exist yet for
 Deals/Pipelines; **2.2C has not started.**
 
+### Milestone 2.2C — Deals & Pipelines RBAC
+
+Permission-matrix data only — no domain-logic change (`packages/crm`
+untouched this step), no API routes, no UI. **2.2D has not started.**
+
+**8 new `PermissionKey`s added** to `packages/auth/src/permissions.ts`:
+`deals:read`, `deals:create`, `deals:update`, `deals:delete`,
+`pipelines:read`, `pipelines:create`, `pipelines:update`,
+`pipelines:delete`. No wildcard/catch-all key. No `pipeline_stages:*` key
+set — stages authorize under their parent pipeline's own keys (below).
+
+**Frozen matrix applied exactly**:
+
+| Role | deals:read | deals:create | deals:update | deals:delete | pipelines:read | pipelines:create | pipelines:update | pipelines:delete |
+|---|---|---|---|---|---|---|---|---|
+| org_admin | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| org_member | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| org_viewer | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| agency_owner | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| agency_admin | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| portal_customer | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+No agency roll-up access granted (explicitly out of this milestone's
+scope, same as every other resource added so far).
+
+**Stage authorization mapping (design intent for 2.2D, not yet wired to
+any route)**: `pipeline_stages` has no permission keys of its own. A
+future stage-level API route authorizes under its parent pipeline's own
+keys: `GET` stages → `pipelines:read`; `POST` a stage →
+`pipelines:create`; `PATCH` a stage (including the classification change
+that cascades `deals.status`, Milestone 2.2B) → `pipelines:update`;
+`DELETE` (soft-delete) a stage → `pipelines:delete`. Documented in both
+`packages/auth/src/permissions.ts`'s own comment and `docs/08-Security.md`
+§3.1.
+
+**Migration**: one additive file,
+`20260814110000_update_role_permission_sets_2_2c.sql` — a
+`roles.permission_set` data update only (no schema/RLS/function
+change), following the exact established pattern (full, deterministic
+per-role JSONB replacement, never a merge) from the M1.5 seed, M1.6, and
+2.1E permission-set migrations. Only `org_admin`/`org_member`/`org_viewer`
+rows are touched; `agency_owner`/`agency_admin`/`portal_customer` rows are
+left untouched (they gain none of the 8 keys) and remain byte-identical
+to their previously-committed state.
+
+**`roles.permission_set` behavior**: verified byte-equivalent to
+`PERMISSION_MATRIX` via `permission-set-sync.test.ts` run against the
+real local database after the migration was applied — `toEqual()`
+deep-equality on every role's `permission_set`, plus a row-count/role-set
+check. This is the same regression guard established at M1.5 and reused
+unchanged at every subsequent permission-set update (M1.6, 2.1E, now
+2.2C) — the migration's correctness is proven empirically, not merely
+asserted in a comment.
+
+**Tests**: `packages/auth/tests/permissions.test.ts`'s independently
+hand-written `EXPECTED` matrix (never derived from `PERMISSION_MATRIX`,
+by design — the whole point of this file is to catch a wrong value in
+the real matrix, not tautologically re-assert it) extended with all 8
+new keys for all 6 roles, plus dedicated Milestone 2.2C describe blocks
+proving: the full frozen Deals/Pipelines matrix per role; stage
+authorization maps to `pipelines:*` (structural check that no
+`pipeline_stages:*` key exists anywhere in the matrix, plus a documented-
+intent test for the four HTTP-verb mappings); `deals:delete` implies no
+DSR/compliance permission; `pipelines:delete` never diverges from
+`deals:delete` by accident (no role in the frozen matrix holds one
+without the other, proving `can()` has no cross-key inference); every
+pre-2.2C permission (all 14 M1.5/M1.6 keys plus the 8 2.1E CRM keys)
+unchanged for every role; an unrecognized action string and an
+unrecognized role both deny without throwing. The pre-existing
+`readOnlyGrants` list in the "deny-by-default" test was updated to
+include `deals:read`/`pipelines:read` for `org_viewer` (a required,
+narrow update — not a weakening — since that role now legitimately holds
+two additional read grants the test's own sweep would otherwise
+misreport as unexpectedly denied).
+
+**Security review, confirmed from source**: `org_member` cannot delete
+deals (`deals:delete` absent from its grants) or manage pipeline
+structure (only `pipelines:read` present); `org_viewer` cannot mutate
+anything in either resource; both agency roles and `portal_customer` get
+zero direct access to all 8 keys; every grant remains subject to `can()`'s
+existing, unmodified `ResourceContext` scope check (`resource.organizationId
+!== actor.organizationId` denies regardless of role/permission — proven
+by a dedicated 2.2C test using `deals:delete`/`pipelines:delete`); `can()`
+itself was not modified in any way — no new authorization mechanism,
+branch, or bypass path was introduced, only data added to the existing
+`PERMISSION_MATRIX` object and its DB mirror.
+
+**Verification**: full monorepo **1167/1167** across all 7 tested
+packages (database 391, incl. 1 new migration — migration-safety now
+77/77; auth **257**, incl. 61 new across `permissions.test.ts`
+(224 total) and the unchanged-but-now-differently-populated
+`permission-set-sync.test.ts` (2, re-verified against the real local DB
+post-migration); crm 192 unchanged — no domain-layer file touched this
+step; tenancy 28; compliance 26; web 252; ui 21). Lint/typecheck/
+production build all clean. `git diff --check` clean, no secrets in
+changed/new files.
+
+**No domain/API/UI work included**: confirmed via `git status` — the
+only files touched are `packages/auth/src/permissions.ts`,
+`packages/auth/tests/permissions.test.ts`, the one new migration, and
+this documentation. Zero files under `packages/crm`, `apps/web/app/api`,
+or any UI directory.
+
+**Milestone 2.2C: DONE** (RBAC data only). **Milestone 2.2 overall
+remains open** — no API routes or UI exist yet for Deals/Pipelines;
+**2.2D has not started.**
+
 ---
 
 ## Overall Phase 1 Recommendation

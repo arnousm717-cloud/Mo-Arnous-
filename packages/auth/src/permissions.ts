@@ -43,7 +43,15 @@ export type PermissionKey =
   | "contacts:read"
   | "contacts:create"
   | "contacts:update"
-  | "contacts:delete";
+  | "contacts:delete"
+  | "deals:read"
+  | "deals:create"
+  | "deals:update"
+  | "deals:delete"
+  | "pipelines:read"
+  | "pipelines:create"
+  | "pipelines:update"
+  | "pipelines:delete";
 
 export interface Actor {
   userId: string;
@@ -99,6 +107,35 @@ type PermissionGrants = Partial<Record<PermissionKey, true>>;
  * exclusively by data-subject-requests:execute, a wholly separate
  * permission checked by a wholly separate route; the two are never
  * coupled here or anywhere else.
+ *
+ * deals:* and pipelines:* (Milestone 2.2C, docs/13 "Milestone 2.2" frozen
+ * decision 2): two DISTINCT resource key sets, deliberately never folded
+ * into one deals:* umbrella — a pipeline is structural configuration
+ * (who can reshape the sales process) while a deal is working data (who
+ * can work deals within whatever process already exists), and the
+ * frozen matrix intentionally grants them differently: org_member can
+ * create/update deals but only READ pipelines, never reshape pipeline
+ * structure. No wildcard/catch-all permission of either family exists.
+ * pipelines:delete authorizes ONLY the ordinary soft-delete
+ * packages/crm's softDeletePipeline exposes (itself already rejecting
+ * deletion of the organization's active default, 2.2B) — same
+ * soft-delete-only discipline as companies:delete/contacts:delete.
+ *
+ * pipeline_stages has NO permission keys of its own — deliberately no
+ * pipeline_stages:* set exists. Stage operations authorize under their
+ * PARENT pipeline's own keys instead (design intent carried into 2.2D's
+ * future API routes): list/get a stage => pipelines:read; create a stage
+ * => pipelines:create; update a stage (including the classification
+ * change that cascades deals.status, 2.2B) => pipelines:update;
+ * soft-delete a stage => pipelines:delete. A stage has no independent
+ * existence or authorization story apart from the pipeline that owns it.
+ *
+ * agency_owner/agency_admin/portal_customer get NONE of these 12 keys —
+ * same structural reason already established for companies:* and
+ * contacts:* above (no agency_rollup_deals/agency_rollup_pipelines view exists yet;
+ * an agency-scoped Actor carries agencyId, not organizationId). Agency
+ * roll-up access to Deals/Pipelines remains explicitly out of scope for
+ * this milestone (docs/13 Milestone 2.2C).
  */
 export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
   agency_owner: {
@@ -136,6 +173,14 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "contacts:create": true,
     "contacts:update": true,
     "contacts:delete": true,
+    "deals:read": true,
+    "deals:create": true,
+    "deals:update": true,
+    "deals:delete": true,
+    "pipelines:read": true,
+    "pipelines:create": true,
+    "pipelines:update": true,
+    "pipelines:delete": true,
   },
   org_member: {
     "organizations:read": true,
@@ -145,11 +190,17 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "contacts:read": true,
     "contacts:create": true,
     "contacts:update": true,
+    "deals:read": true,
+    "deals:create": true,
+    "deals:update": true,
+    "pipelines:read": true,
   },
   org_viewer: {
     "organizations:read": true,
     "companies:read": true,
     "contacts:read": true,
+    "deals:read": true,
+    "pipelines:read": true,
   },
   portal_customer: {},
 };
