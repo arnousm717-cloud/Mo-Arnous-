@@ -35,6 +35,8 @@ export default async function DashboardPage(): Promise<React.ReactElement> {
         <Link href="/contacts">Contacts</Link>
         {" | "}
         <Link href="/deals">Deals</Link>
+        {" | "}
+        <Link href="/pipelines">Pipelines</Link>
       </nav>
       <form action={logoutAction}>
         <button type="submit">Log out</button>

@@ -164,6 +164,7 @@ export default async function DealsPage({
     <main className={styles.page}>
       <header className={styles.pageHeader}>
         <h1>Deals</h1>
+        <Link href="/deals/board">Board view</Link>
       </header>
 
       <section className={styles.section}>

@@ -2333,6 +2333,182 @@ Pipeline board, no pipeline-management UI; **2.2F has not started.**
 
 ---
 
+### Milestone 2.2F — Pipeline Management UI + minimal PipelineBoard
+
+Server Components/Actions only (ADR-004 preserved) — every route reuses
+the exact 2.2D `handlers.ts` functions in-process, no browser `fetch` to
+the app's own API, no direct browser DB access, no new client-side
+data-access pattern. **No schema/RLS/RBAC/API-contract change was made**
+— confirmed via `git status`: `packages/database/supabase/migrations/`
+and `packages/auth` both show zero diff this milestone; every changed/
+new file is under `apps/web/app/{pipelines,deals/board}`,
+`apps/web/tests`, or `packages/ui`. `getPipelineByIdIncludingDeleted`/
+`getPipelineStageByIdIncludingDeleted` (2.2B) and `_shared/pipeline-
+options.ts`/`pipeline-display.ts` (2.2E) already existed — no new
+`packages/crm` function was added this milestone.
+
+**Pipeline management routes**: `/pipelines` (list, active pipelines
+only, default badge, stage count via the existing `listActiveStageOptions`
+composition, inline create form) and `/pipelines/{id}` (name-only edit,
+a separate "Default pipeline" section calling `POST .../set-default`
+through its own dedicated action — deliberately never combined with the
+name-edit form, so the two operations can never be confused — soft-delete,
+and nested stage management for that one pipeline).
+
+**Stage management**, nested in `/pipelines/{id}`: an always-visible
+inline edit form per stage (name/sortOrder/probability/isWonStage/
+isLostStage, pre-filled, matching every other edit form's own "no
+toggle-based edit mode" convention) plus its own two-step soft-delete
+confirm, and a create form below the list. Update/create field
+validation (0..100 probability, won/lost mutual exclusivity, sortOrder
+must be an integer) is NOT reimplemented — remains exclusively
+packages/crm's; a genuine won/lost classification change is left to
+`updatePipelineStage` (2.2B) to cascade `deals.status` for every
+referencing deal, unchanged. `canUpdate` (`pipelines:update`) and
+`canDelete` (`pipelines:delete`) gate the stage edit-fields and delete
+control independently, not coupled — the current RBAC matrix happens to
+grant both only to `org_admin`, but the component does not assume that
+coincidence.
+
+**Soft-delete UX**: deleting the organization's active default pipeline
+surfaces the existing 409 domain error as-is (`CannotDeleteDefaultPipelineError`)
+— this milestone never auto-picks a replacement default. The delete form
+proactively hides the delete control and explains why when the pipeline
+being viewed is already the default, rather than only discovering that
+after a doomed submission. Soft-deleting a stage still referenced by
+active deals is explicitly permitted (the frozen 2.2B design) — the UI
+states plainly that referencing deals keep pointing at it and remain
+fully readable/editable; nothing here moves, nulls, or hard-deletes.
+
+**Minimal PipelineBoard** (`packages/ui/src/pipeline-board.tsx`, new
+named exports `PipelineBoard`/`PipelineBoardState`/`PipelineBoardCard`/
+`PipelineBoardStage`/`PipelineBoardProps`): presentation-only, same
+discipline as `entity-table.tsx` — no data fetching, no `can()` checks,
+no idempotency, no fetch, CSS Modules only. `loading`/`empty`/`error`/
+`ready` states mirror `EntityTableState` exactly; `empty` means zero
+*stages* (an unconfigured pipeline) — an individual stage column with
+zero cards is a normal, non-error render, never the board-level empty
+state. A card's `moveControl` is an opaque, caller-supplied `ReactNode`
+(the same `rowActions` render-prop precedent `EntityTable` already
+established) rather than an `onMove` callback, keeping the component
+free of any assumption about how a move happens.
+
+**Board route**: `/deals/board`, a dedicated route rather than a view
+toggle on `/deals` — audited both; `/deals` already carries five filters,
+cursor pagination, and a create form, and the board needs a
+fundamentally different data shape (one pipeline's active deals grouped
+by stage, not a filtered paginated flat list), so a second route keeps
+both pages single-purpose. One link each way (`/deals` → "Board view",
+`/deals/board` → "Back to list"); no new navigation system, no sidebar.
+Reuses `decideDealsConsoleAccess` (`deals:read`) unchanged — the board is
+a view of Deals data, not a new resource.
+
+**Board pipeline selection**: defaults to the organization's active
+default pipeline; a plain `<select>` + submit (server-driven `method="get"`,
+same pattern as `/deals`'s own filter form) switches between active
+pipelines only — a deleted pipeline can never be selected. A stale/
+invalid/deleted `pipelineId` query value falls back to the default
+pipeline safely, never displaying a raw id.
+
+**Board data**: one fetch of the selected pipeline's active stages
+(`handleListPipelineStages`, already sort_order-ordered) and one fetch of
+its active deals (`handleListDeals` with `pipelineId` + `limit=100`) —
+reusing existing handlers, no new read-model layer. **Known, documented
+limitation**: a pipeline with more than 100 active deals only shows the
+first 100 on the board (`packages/crm`'s own `MAX_LIMIT`) — a real
+scale limit, not silently engineered around with cursor-looping, which
+would be new read-model scope this milestone excludes.
+
+**Historical deleted-stage handling on the board** (§18/§21, audited
+explicitly): a deal whose `stageId` points at a since-soft-deleted stage
+would match none of the board's active-stage columns — rather than
+silently disappearing, it is placed in an explicit synthetic "Deleted
+stage" holding column (only rendered when at least one such deal exists),
+with the same move control offering every active stage in the pipeline
+as a recovery destination. This column's presentation-only `id` is never
+a database identifier passed anywhere requiring validity.
+
+**Deal card display**: `dealDisplayLabel()` (2.2E, unchanged) for the
+label — never a full raw UUID — plus a pre-formatted amount/currency
+string when present. Deliberately minimal per this milestone's own
+instruction: no company/contact context line was added to avoid
+overfilling the card (the label already resolves to the company or
+contact name when one exists).
+
+**Accessible stage move — the required functional interaction**: every
+card's `moveControl` is a plain `<select>` of the pipeline's other active
+stages plus an explicit "Move" submit button (`apps/web/app/deals/board/
+stage-move-form.tsx`) — fully operable by keyboard/screen reader, no
+pointer required. This is the ONLY move mechanism in this milestone;
+**drag-and-drop is explicitly deferred, not implemented** — building it
+would require a new drag-and-drop library (none exists in this
+repository's dependency tree) and would materially complicate both
+accessibility and testing for a milestone whose acceptance criterion is
+the keyboard-accessible move, not drag-and-drop polish. A move calls
+`moveDealToStageAction` → `move-logic.ts` → `handleUpdateDeal` with only
+`{ stageId }` in the body — the exact same Deal PATCH path
+`../[id]/update-logic.ts` uses, not a second write path; `status` is
+never sent and is always re-derived server-side from the new stage
+(2.2B), proven by dedicated won/lost/back-to-open tests. A destination
+can only ever be an active stage in the same pipeline — a wrong-pipeline
+or soft-deleted stage id is rejected by the unchanged domain layer
+(`InvalidStageRelationshipError` → 400), never offered as a `<select>`
+option in the first place by construction (the `<select>` is built only
+from that pipeline's own active stages).
+
+**Idempotency**: reuses the existing mechanism unchanged, one stable key
+per mounted `StageMoveForm` instance. Dedicated tests cover retry-replay
+(no duplicate/inconsistent write), changed-payload conflict, and
+authorization-rechecked-before-replay (a demoted actor cannot replay a
+stale move with continued authority).
+
+**RBAC**: pipeline/stage management is gated exactly on
+`pipelines:read/create/update/delete` per the frozen 2.2C matrix
+(`org_admin` full management, `org_member`/`org_viewer` read-only,
+agency/portal roles no access) — unchanged, confirmed via `packages/auth`
+having zero diff. The board's stage-move is gated on `deals:update` (the
+same permission `/deals/{id}`'s own edit form already requires) —
+`org_admin`/`org_member` can move, `org_viewer` and agency roles cannot;
+unauthorized controls are absent from rendered output, not disabled, and
+every mutation re-checks `can()` server-side regardless of what the
+client rendered.
+
+**Known, honestly-reported limitations**: (1) the single-fetch 100-deal
+board cap (above); (2) this agent is text-only — no manual browser/
+keyboard/drag-and-drop verification was performed; correctness rests on
+the automated test suite (lint/typecheck/build/1376 unit+integration
+tests, including `renderToStaticMarkup`-based `PipelineBoard` tests that
+prove rendering structure but cannot prove a real click/submit fires)
+and careful source review, not a rendered-page or real-keyboard pass —
+that belongs to a later, explicitly-scoped manual/staging verification
+step (2.2H per the kickoff prompt), not this one.
+
+**Verification**: full monorepo **1376/1376** across all 7 tested
+packages (database 391 unchanged — no migration; auth 257 unchanged — no
+RBAC-matrix change; tenancy 28, compliance 26 unchanged; crm 195
+unchanged — no domain-layer file touched; ui **39** — +18 new
+`PipelineBoard` tests; web **440** — +47 `pipelines-console.test.ts` +17
+`deals-board.test.ts`). Deals API (30), Pipelines API (19),
+Pipeline-Stages API (25), Deals console (50), Companies/Contacts console
+(29/40), owner-options (10) all re-run unmodified and green as
+regressions. Migration-safety unchanged (no migration added).
+Lint/typecheck/production build all clean across all 8 packages
+(`/pipelines`, `/pipelines/[id]`, `/deals/board` all present in the build
+output). `git diff --check` clean, no secrets found in changed/new files.
+
+**Source-integrity note**: unlike 2.2E, no bulk text-replacement command
+(e.g. `sed`) was run against any file this milestone — every edit used
+the Read/Edit/Write tools directly. A targeted re-check for the same
+corruption signature found in 2.2E (`<selec`/`<inpu` truncations) was
+still performed as due diligence across every new/changed file; none
+found.
+
+**Milestone 2.2F: DONE.** **Milestone 2.2 overall remains open** —
+2.2G (final audit) and 2.2H (manual/staging verification) have not
+started.
+
+---
+
 ## Overall Phase 1 Recommendation
 
 | Milestone | Verdict |

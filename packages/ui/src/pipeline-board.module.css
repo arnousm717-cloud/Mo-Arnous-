@@ -1,0 +1,102 @@
+/*
+ * Milestone 2.2F. Plain CSS Modules — no Tailwind/shadcn/component
+ * framework (locked decision), same discipline as entity-table.module.css.
+ * Only the tokens the platform actually emits today are referenced from
+ * the global theme; everything else is a local custom property scoped to
+ * this file.
+ *
+ * Responsive strategy: horizontal scroll of the column row on narrow
+ * viewports (docs/07 §5's own "stacked, filterable list" degradation is
+ * the full-board target, not required for this milestone's minimal
+ * version) — mirrors entity-table.module.css's own reasoning: a single
+ * rendering path, every column still reachable.
+ */
+
+.wrapper {
+  --pipeline-board-border: #e5e7eb;
+  --pipeline-board-muted-text: #6b7280;
+  --pipeline-board-header-bg: #f4f5f7;
+  --pipeline-board-error-text: #b91c1c;
+
+  font-family: var(--font-sans, inherit);
+  width: 100%;
+}
+
+.board {
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.column {
+  flex: 0 0 16rem;
+  min-width: 16rem;
+  background: var(--pipeline-board-header-bg);
+  border: 1px solid var(--pipeline-board-border);
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+}
+
+.columnHeader {
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin: 0 0 0.5rem 0;
+}
+
+.columnCount {
+  font-weight: 400;
+  color: var(--pipeline-board-muted-text);
+}
+
+.emptyColumn {
+  font-size: 0.8125rem;
+  color: var(--pipeline-board-muted-text);
+  margin: 0;
+}
+
+.cardList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--pipeline-board-border);
+  border-radius: 0.25rem;
+  padding: 0.5rem;
+}
+
+.cardLabel {
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin: 0 0 0.25rem 0;
+}
+
+.cardMeta {
+  font-size: 0.75rem;
+  color: var(--pipeline-board-muted-text);
+  margin: 0 0 0.25rem 0;
+}
+
+.cardMove {
+  margin-top: 0.5rem;
+}
+
+.statusMessage {
+  padding: 1rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--pipeline-board-muted-text);
+  margin: 0;
+}
+
+.errorMessage {
+  padding: 1rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--pipeline-board-error-text);
+  margin: 0;
+}
