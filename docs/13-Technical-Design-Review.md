@@ -2056,6 +2056,132 @@ or any UI directory.
 remains open** — no API routes or UI exist yet for Deals/Pipelines;
 **2.2D has not started.**
 
+### Milestone 2.2D — Deals, Pipelines & Pipeline-Stages API
+
+HTTP layer only — no `packages/crm` domain-logic change, no RBAC-matrix
+change, no UI. **2.2E has not started.**
+
+**Routes added** (7 route groups, `route.ts` + `handlers.ts` pairs,
+following the exact Companies/Contacts split — `route.ts`: HTTP
+extraction/auth/same-origin/JSON parsing; `handlers.ts`: org resolution,
+`can()`, domain call, error mapping):
+
+- `GET`/`POST /api/v1/deals`, `GET`/`PATCH`/`DELETE /api/v1/deals/{id}`
+- `GET`/`POST /api/v1/pipelines`, `GET`/`PATCH`/`DELETE
+  /api/v1/pipelines/{id}`
+- `POST /api/v1/pipelines/{id}/set-default` — this milestone's own
+  explicit design decision, below
+- `GET`/`POST /api/v1/pipelines/{id}/stages`, `GET`/`PATCH`/`DELETE
+  /api/v1/pipelines/{id}/stages/{stageId}`
+
+Full contract (request/response shapes, filters, field allowlists, error
+mapping) recorded in `docs/04-API-Architecture.md` §2.5 — not duplicated
+here.
+
+**Default-pipeline HTTP decision.** No frozen HTTP contract existed for
+switching a pipeline's default before this step. Chose option A from the
+prompt's own preferred list: a dedicated `POST
+/api/v1/pipelines/{id}/set-default` action endpoint, calling
+`packages/crm`'s existing `setDefaultPipeline` (M2.2B) unchanged —
+mirroring the already-established `POST .../{id}/preview` /
+`POST .../{id}/execute` dedicated-verb-pair precedent for
+`data-subject-requests` (M1.6 Decision D): a state change with real
+invariant implications gets its own named endpoint, never a hidden field
+on a general-purpose `PATCH`. Confirmed structurally: `PATCH
+/api/v1/pipelines/{id}`'s body-extraction function has no code path for
+`isDefault` at all (not merely a runtime rejection) — proven by a
+dedicated mass-assignment test. `pipelines:update` RBAC. No
+`Idempotency-Key` (not one of the six routes this milestone's own
+approved plan enumerated, and the operation is already naturally
+idempotent).
+
+**Nested-stage IDOR safety — adversarially proven, not merely asserted.**
+A request for `/pipelines/A/stages/B` where `B` genuinely exists but
+belongs to pipeline `C` (even a `C` the caller legitimately owns in the
+same organization) returns the byte-identical `404` body
+(`{ "error": "Not found" }`) as a genuinely nonexistent `stageId` or one
+in a different organization entirely — proven by dedicated tests
+comparing the two JSON bodies for equality, for `GET`, `PATCH`, and
+`DELETE` alike, and confirming `PATCH`/`DELETE` never mutate the
+wrong-parent stage. This falls directly out of reusing `packages/crm`'s
+own `(organization_id, pipeline_id, id)`-scoped lookups (M2.2B) without
+adding a redundant, error-message-risking parent pre-check for the
+single-stage routes — only `GET`/`POST /stages` (the collection
+endpoints, where an empty list would otherwise be ambiguous with "no
+such pipeline") explicitly pre-check the parent pipeline's existence.
+
+**RBAC mapping**: `deals:read/create/update/delete` and
+`pipelines:read/create/update/delete` (M2.2C, unchanged by this step).
+`pipeline_stages` routes authorize under the parent pipeline's own
+`pipelines:*` keys — no `pipeline_stages:*` key was added or is needed.
+Proven per-role: `org_admin` full access to both resource families;
+`org_member` full deals CRUD except delete, pipelines/stages read-only;
+`org_viewer` read-only on both; agency roles and `portal_customer` zero
+direct access to either.
+
+**Mass-assignment protection**: `id`/`organizationId`/`organization_id`/
+`deletedAt`/`createdAt`/`updatedAt` have no extraction path on any new
+route (same discipline as Companies/Contacts). `deals` additionally has
+no extraction path for `status` under any key, on `POST` or `PATCH` —
+proven by a dedicated test injecting `status: "won"` into both verbs and
+confirming the response's `status` is unaffected (derived from
+`stageId,` per M2.2B). `pipelines/{id}/stages POST` additionally has no
+extraction path for a body-supplied `pipelineId` — a stage is always
+created under the URL's `{id}`, proven by a dedicated test supplying a
+different pipeline's id in the body and confirming it has zero effect.
+
+**Idempotency**: wired on exactly the six routes the approved plan
+enumerated (`POST`/`PATCH` for deals, pipelines, and stages) via the
+unmodified `apps/web/app/api/v1/_shared/idempotency.ts` — reused, not
+changed, no defect found. Never on `GET`, `DELETE`, or `set-default`.
+
+**Soft-delete behavior**: `DELETE` on all three resources is
+`packages/crm`'s existing soft-delete only — never a physical `DELETE`.
+`DELETE /api/v1/pipelines/{id}` returns `409` (not `400` or `404`) when
+the target is the organization's active default, matching
+`DuplicateContactEmailError`'s own "valid request, rejected by current
+state" category. `DELETE` on a pipeline stage never rejects merely
+because active deals reference it (the frozen Milestone 2.2 decision,
+unchanged since 2.2B).
+
+**Relationship semantics preserved from 2.2B, verified via API-level
+tests reusing no duplicated validation**: a new/reassigned relationship
+to a since-soft-deleted company/contact/pipeline/stage is rejected
+(`400`); an unrelated field edit on a deal succeeds even after its
+linked company, contact, pipeline, or stage has since been soft-deleted;
+a wrong-pipeline stage assignment is rejected; reassigning `pipelineId`
+without a compatible `stageId` in the same request is rejected; `status`
+is always stage-derived, both on create and on a genuine stage move.
+
+**Known limitations / deferred work**: no agency roll-up access to
+Deals/Pipelines (explicitly out of scope, matching every other resource
+so far); no sorting/search framework, no offset pagination, no saved
+views (none required by the frozen design); pipeline-stage `sortOrder`
+has no uniqueness enforcement (matches `packages/crm`'s own M2.2B
+design — a UX concern, not a data-integrity one); Deals UI, Pipeline
+board, and 2.2E generally have not started.
+
+**Verification**: full monorepo **1241/1241** across all 7 tested
+packages (database 391 unchanged — no new migration; auth 257 unchanged
+— no RBAC-matrix change; crm 192 unchanged — no domain-layer file
+touched; tenancy 28; compliance 26; web **326**, incl. 72 new: 30 deals-
+API + 19 pipelines-API + 25 pipeline-stages-API (later increased to 30
+for deals after two required-but-missing tests — contact-soft-delete
+unrelated-edit, demoted-actor-idempotency-replay — were added to use two
+initially-unused fixture imports flagged by lint, not removed); ui 21).
+Migration-safety 77/77 (unchanged — no migration added). Lint/typecheck/
+production build all clean. `git diff --check` clean, no secrets in
+changed/new files.
+
+**No `packages/crm` domain-logic, RBAC-matrix, or migration change was
+included.** Confirmed via `git status` — every changed file is under
+`apps/web/app/api/v1/{deals,pipelines}` or `apps/web/tests`, plus
+`docs/04`/`docs/13`.
+
+**Milestone 2.2D: DONE** (HTTP layer only). **Milestone 2.2 overall
+remains open** — no Deals UI, no Pipeline board, no UI at all exists yet
+for Deals/Pipelines; **2.2E has not started.**
+
 ---
 
 ## Overall Phase 1 Recommendation

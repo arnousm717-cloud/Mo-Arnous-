@@ -146,3 +146,79 @@ export async function seedContact(
     client.release();
   }
 }
+
+/** Milestone 2.2D. Direct-SQL seed (not via the domain layer) — mirrors
+ * seedCompany/seedContact's own convention exactly. */
+export async function seedPipeline(
+  organizationId: string,
+  overrides: Partial<{ name: string; isDefault: boolean }> = {},
+): Promise<string> {
+  const client = await adminPool.connect();
+  try {
+    const r = await client.query<{ id: string }>(
+      "insert into public.pipelines (organization_id, name, is_default) values ($1, $2, $3) returning id",
+      [organizationId, overrides.name ?? "Seeded Pipeline", overrides.isDefault ?? false],
+    );
+    return r.rows[0]!.id;
+  } finally {
+    client.release();
+  }
+}
+
+export async function seedPipelineStage(
+  organizationId: string,
+  pipelineId: string,
+  overrides: Partial<{ name: string; sortOrder: number; isWonStage: boolean; isLostStage: boolean }> = {},
+): Promise<string> {
+  const client = await adminPool.connect();
+  try {
+    const r = await client.query<{ id: string }>(
+      `insert into public.pipeline_stages (organization_id, pipeline_id, name, sort_order, is_won_stage, is_lost_stage)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [
+        organizationId,
+        pipelineId,
+        overrides.name ?? "Seeded Stage",
+        overrides.sortOrder ?? 10,
+        overrides.isWonStage ?? false,
+        overrides.isLostStage ?? false,
+      ],
+    );
+    return r.rows[0]!.id;
+  } finally {
+    client.release();
+  }
+}
+
+export async function seedDeal(
+  organizationId: string,
+  pipelineId: string,
+  stageId: string,
+  overrides: Partial<{ ownerId: string | null; companyId: string | null }> = {},
+): Promise<string> {
+  const client = await adminPool.connect();
+  try {
+    const r = await client.query<{ id: string }>(
+      `insert into public.deals (organization_id, pipeline_id, stage_id, owner_id, company_id)
+       values ($1, $2, $3, $4, $5) returning id`,
+      [organizationId, pipelineId, stageId, overrides.ownerId ?? null, overrides.companyId ?? null],
+    );
+    return r.rows[0]!.id;
+  } finally {
+    client.release();
+  }
+}
+
+/** A pipeline + one open (unflagged) stage, in one call — the minimal
+ * fixture almost every deal test needs. */
+export async function seedPipelineWithStage(
+  organizationId: string,
+  overrides: Partial<{ pipelineName: string; stageName: string; isDefault: boolean }> = {},
+): Promise<{ pipelineId: string; stageId: string }> {
+  const pipelineId = await seedPipeline(organizationId, {
+    name: overrides.pipelineName ?? "Seeded Pipeline",
+    isDefault: overrides.isDefault ?? false,
+  });
+  const stageId = await seedPipelineStage(organizationId, pipelineId, { name: overrides.stageName ?? "Seeded Stage" });
+  return { pipelineId, stageId };
+}
