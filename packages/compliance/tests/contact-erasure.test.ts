@@ -461,6 +461,77 @@ describe("consent history: preserved across contact erasure", () => {
   });
 });
 
+describe("deal relationship: primary_contact_id survives contact erasure", () => {
+  it("a deal referencing the erased contact survives, with primary_contact_id set to null and every other field intact (deals_contact_org_fk ON DELETE SET NULL, Milestone 2.2A)", async () => {
+    const admin = await createAuthUser("deal-relationship-admin");
+    const orgId = await createOrgWithOwner(admin, "Contact Erasure Deal Org");
+    const contact = await createContact(orgId, { firstName: "Referenced By Deal" });
+
+    const { pipelineId, stageId } = await seedAsAdmin(async (client) => {
+      const pipeline = await client.query<{ id: string }>(
+        "insert into public.pipelines (organization_id, name, is_default) values ($1, $2, false) returning id",
+        [orgId, "Erasure Test Pipeline"],
+      );
+      const stage = await client.query<{ id: string }>(
+        "insert into public.pipeline_stages (organization_id, pipeline_id, name, sort_order) values ($1, $2, $3, $4) returning id",
+        [orgId, pipeline.rows[0]!.id, "Erasure Test Stage", 10],
+      );
+      return { pipelineId: pipeline.rows[0]!.id, stageId: stage.rows[0]!.id };
+    });
+
+    const dealId = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        `insert into public.deals (organization_id, primary_contact_id, pipeline_id, stage_id, amount, currency, status)
+         values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+        [orgId, contact.id, pipelineId, stageId, "500", "EUR", "open"],
+      );
+      return r.rows[0]!.id;
+    });
+
+    const dealColumns =
+      "id, organization_id, primary_contact_id, pipeline_id, stage_id, status, amount, currency, deleted_at";
+    const before = await seedAsAdmin(async (client) => {
+      const r = await client.query(`select ${dealColumns} from public.deals where id = $1`, [dealId]);
+      return r.rows[0];
+    });
+    expect(before.primary_contact_id).toBe(contact.id);
+    expect(before.deleted_at).toBeNull();
+
+    const dsr = await fileDataSubjectRequest(
+      { userId: admin, organizationId: orgId, roleKey: "org_admin" },
+      { subjectType: "contact", subjectId: contact.id, requestType: "delete" },
+    );
+    // The real application/compliance erasure path — never a direct DELETE
+    // in this test — mirrors executeContactErasure's own "own-organization
+    // success" test above exactly.
+    const result = await executeContactErasure({ userId: admin }, dsr.id);
+    expect(result.targetContactId).toBe(contact.id);
+
+    // The contact is genuinely, physically gone — same assertion shape as
+    // the existing "hard-deletes the contact row" test above.
+    expect(await rowExistsIn("public.contacts", "id", contact.id)).toBe(false);
+
+    // The deal survives (neither soft-deleted nor physically removed) with
+    // every field except primary_contact_id unchanged — proves
+    // deals_contact_org_fk's ON DELETE SET NULL (primary_contact_id) is
+    // the only thing that touched this row, nothing broader.
+    const after = await seedAsAdmin(async (client) => {
+      const r = await client.query(`select ${dealColumns} from public.deals where id = $1`, [dealId]);
+      return r.rows[0];
+    });
+    expect(after).toBeDefined();
+    expect(after.id).toBe(before.id);
+    expect(after.organization_id).toBe(before.organization_id);
+    expect(after.pipeline_id).toBe(before.pipeline_id);
+    expect(after.stage_id).toBe(before.stage_id);
+    expect(after.status).toBe(before.status);
+    expect(after.amount).toBe(before.amount);
+    expect(after.currency).toBe(before.currency);
+    expect(after.deleted_at).toBeNull();
+    expect(after.primary_contact_id).toBeNull();
+  });
+});
+
 describe("transactional safety: audit-write failure rolls back the entire erasure", () => {
   it("a forced audit_logs insert failure rolls back the contact delete and the DSR status update together", async () => {
     const admin = await createAuthUser("chaos-admin");

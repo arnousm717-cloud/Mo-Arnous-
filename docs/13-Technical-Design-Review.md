@@ -2509,6 +2509,56 @@ started.
 
 ---
 
+### Milestone 2.2G — Final Adversarial/Security/UI Audit
+
+Fresh, from-source audit of the complete 2.2 implementation (2.2-P0
+through 2.2F) — migrations, RLS, SECURITY DEFINER functions, RBAC
+matrix, domain layer, API handlers, idempotency, UI, and PipelineBoard —
+against source directly, not against prior milestone reports. No code
+was modified during the audit itself (working tree confirmed clean
+before/after). Full detail: **1376/1376** tests, lint/typecheck/build/
+migration-safety all clean, zero `.only`/`.skip`, zero mocked security
+boundaries, no removed regression coverage, no accidental 2.3+ scope.
+
+**One MEDIUM finding, now CLOSED**: no automated test proved that GDPR
+contact erasure's interaction with `deals.primary_contact_id` (via
+`deals_contact_org_fk ... on delete set null (primary_contact_id)`,
+2.2A) actually works end-to-end through the real
+`executeContactErasure` → `execute_contact_erasure()` path — the
+identical, already-tested sibling was `company_id`
+(`packages/database/tests/pipelines-deals-schema.test.ts`), never
+`primary_contact_id`. **Remediated**: one new test added to
+`packages/compliance/tests/contact-erasure.test.ts` ("deal
+relationship: primary_contact_id survives contact erasure") — seeds a
+real pipeline/stage/deal referencing a real contact, executes the real
+`executeContactErasure` (never a direct `DELETE` shortcut), and asserts:
+the contact is physically gone; the deal still exists, neither
+soft-deleted nor hard-deleted; `primary_contact_id` is `null`; every
+other field (`id`, `organization_id`, `pipeline_id`, `stage_id`,
+`status`, `amount`, `currency`) is byte-identical to its pre-erasure
+value. **Passes against the current implementation, unmodified** — no
+schema/domain/API/UI change was needed or made. Full monorepo re-verified
+green at **1377/1377** (1376 + 1) after the addition.
+
+All other 2.2G audit findings were INFORMATIONAL/LOW and require no
+action: (1) `deriveDealStatus`/`deriveStatusFromFlags` are two separate
+functions expressing the identical open/won/lost precedence — currently
+consistent, a latent duplication only; (2) the default-pipeline
+"at-most-one" (DB-guaranteed, permanent) vs. "exactly-one" (domain-layer-
+guaranteed for every operation it exposes; a raw same-org UPDATE
+bypassing the app could still flip it) distinction was already correctly
+disclosed in the 2.2A schema migration's own comment before this audit,
+not a new gap; (3) one transient test failure was observed during a
+full-parallel monorepo run in `contact-erasure.test.ts`'s pre-existing,
+2.2-untouched chaos-trigger (fault-injection) test — reproducible only
+under parallel load, passes cleanly in isolation and on every other run;
+not a 2.2 regression, not modified or weakened by this remediation.
+
+**Milestone 2.2G: PASS.** **Milestone 2.2 overall remains open** — 2.2H
+(manual/staging verification) has not started.
+
+---
+
 ## Overall Phase 1 Recommendation
 
 | Milestone | Verdict |
