@@ -1808,6 +1808,147 @@ all clean, `git diff --check` clean, no secrets in new files.
 overall remains open** — no domain layer, RBAC keys, API routes, or UI
 exist yet for Deals/Pipelines; **2.2B has not started.**
 
+### Milestone 2.2B — Deals & Pipelines domain layer (`packages/crm`)
+
+Domain logic only — no RBAC permission keys, no API routes, no UI. No
+2.2A migration was modified; three new source files
+(`pipelines.ts`/`pipeline-stages.ts`/`deals.ts`) plus one shared
+extraction (`relationship-validation.ts`), exported through
+`packages/crm/src/index.ts`. **2.2C has not started.**
+
+**Closes the two gaps 2.2A deliberately deferred, both at the domain
+layer only:**
+
+1. **Status derivation.** `deals.status` is never an independent create/
+   update input — `CreateDealInput`/`UpdateDealInput` have no `status`
+   field at all, and every function only reads the specific named fields
+   it expects off `input` (never spreads/forwards a raw object), so even
+   a smuggled `status` key is structurally ignored (proven by a dedicated
+   test). On `createDeal`, status is derived from the target stage's
+   `is_won_stage`/`is_lost_stage` flags. On `updateDeal`, status is
+   re-derived whenever `stageId` genuinely changes, written atomically
+   together with `stage_id` in the same `UPDATE`. `updatePipelineStage`
+   cascades a status recompute to every deal referencing that stage (see
+   below) when a stage's own classification changes.
+2. **Zero-default prevention.** `updatePipeline` has no `isDefault` field
+   in its input type at all — switching the default is exposed only
+   through `setDefaultPipeline`, which unsets the old default then sets
+   the new one in one transaction, never transiently violating the
+   partial unique index. `softDeletePipeline` rejects deleting the
+   organization's current active default with a typed
+   `CannotDeleteDefaultPipelineError`, requiring `setDefaultPipeline` to
+   switch the default first — this package never auto-selects a
+   replacement.
+
+**The precise, non-overstated claim**: *all supported `packages/crm`
+domain operations preserve exactly one active default pipeline for
+organizations initialized through the approved seed flow
+(`seed_default_pipeline()`).* The database itself still only guarantees
+**at most one** (the partial unique index, unchanged from 2.2A) — direct
+SQL bypassing this package can still produce zero active defaults,
+exactly as documented in the 2.2A record above. 2.2B closes the gap for
+every operation *this package* exposes, not at the database layer, and
+this doc does not claim otherwise.
+
+**Pipeline-stage referenced-by-active-deals decision.** `softDeletePipelineStage`
+does **not** reject deleting a stage still referenced by active deals.
+This resolves Section 5's open question in favor of the design already
+frozen earlier in Milestone 2.2 planning (see this doc's own Milestone
+2.2 design record, decision 3): *"unrelated deal edits must keep working
+when pipeline/stage is soft-deleted."* Deals keep their `stage_id`/
+`pipeline_id` pointing at the soft-deleted row — mirroring the existing
+Companies/Contacts precedent (a soft-deleted company's dependent
+contacts keep their `companyId` unchanged) — and `updateDeal`'s own
+partial-update semantics (below) are what keep unrelated edits to those
+deals working. `softDeletePipeline` mirrors this same decision for
+non-default pipelines. Neither soft-delete cascades to the other
+direction: deleting a pipeline never cascades to its stages, and stage
+soft-delete never touches deals.
+
+**Stage-classification cascade.** When `updatePipelineStage` changes
+`isWonStage`/`isLostStage` (final value differs from current — a genuine
+classification change, not merely resupplying the same value), it
+recomputes `status` for every deal referencing that stage, org+stage
+scoped, in the same transaction. **Deliberately includes soft-deleted
+deals**, not just active ones — status is treated as a pure derived/
+denormalized field kept unconditionally in sync with its stage's current
+classification, decoupled from the deal's own soft-delete lifecycle.
+This repository's soft-delete convention treats `deleted_at` as ordinary,
+recoverable deletion (restoration is a first-class, tested operation
+elsewhere in this codebase) — keeping status in sync even while deleted
+means a restored deal shows the *correct* current status, never one that
+went stale while it was deleted. Proven by a dedicated test. The cascade
+uses `status is distinct from $1` so it never touches (and never bumps
+`updated_at` on) a deal whose status already matches.
+
+**Relationship partial-update semantics (`updateDeal`).** Applies the
+Milestone 2.1 Contacts lesson natively, not via an external hidden-field
+workaround: for `companyId`/`primaryContactId`/`ownerId`, a field is only
+revalidated when its supplied final value genuinely **differs** from the
+currently stored value. An unchanged relationship — even one that has
+since become inactive (soft-deleted company/contact, removed membership)
+— is never revalidated merely because the field is present in the patch,
+proven by dedicated tests for all three fields (an unrelated edit
+succeeds after the linked company/contact is soft-deleted or the owner's
+membership is removed, whether the field is omitted entirely or
+resupplied unchanged). A genuine reassignment (including reassigning to
+`null`) is always validated, and reassigning to an already-soft-deleted/
+inactive target always fails. `pipelineId`/`stageId` are coupled and
+never nullable: reassigning `pipelineId` to a genuinely different
+pipeline requires `stageId` to be supplied in the same call (rejected
+with a `ValidationError` otherwise — this package never guesses a
+replacement stage), and the two are always written together so they can
+never disagree even transiently within one operation.
+
+**Company/contact consistency decision.** When both `companyId` and
+`primaryContactId` are supplied, this package does **not** require the
+contact to belong to that company. Neither the frozen Milestone 2.2
+design nor the existing Contacts model (`contacts.company_id` is an
+independently optional relationship) requires this constraint, so it was
+not invented. Tenant safety remains mandatory regardless — both fields
+are independently validated against the caller's own organization.
+
+**Typed errors added**: `InvalidContactRelationshipError`,
+`InvalidPipelineRelationshipError`, `InvalidStageRelationshipError`,
+`CannotDeleteDefaultPipelineError` — no near-duplicate classes created;
+`InvalidStageRelationshipError` alone covers "does not exist," "belongs
+to another organization," "is soft-deleted," AND "belongs to a different
+pipeline," mirroring the database's own two-composite-FK design at the
+domain layer.
+
+**Refactor, not scope creep**: `contacts.ts`'s own private
+`validateCompanyRelationship` was moved, unchanged, into the new shared
+`relationship-validation.ts` — `deals.ts` needed the identical check a
+second time, matching the exact precedent `owner-validation.ts` already
+established ("genuine duplication, not speculative sharing"). No
+behavior change; covered by the full, unmodified existing
+`contacts.test.ts` suite passing unchanged.
+
+**Cursor/list design deviation.** `listPipelineStages` returns a plain
+array ordered by `sort_order` (kanban column order), not a cursor
+`Page<T>` — the one genuine incompatibility discovered with the shared
+convention: `Cursor` is hardcoded to `(createdAt, id)` ordering, the
+wrong axis for stages, and stages have no realistic pagination need
+(bounded per-pipeline cardinality — `seed_default_pipeline()` always
+creates exactly 5). Deals/pipelines both use the unmodified existing
+cursor convention; deals additionally filter by `pipelineId`, `stageId`,
+`ownerId`, `companyId`, `status`.
+
+**Verification**: full monorepo **1105/1105** across all 7 tested
+packages (database 390 — unchanged, no new migration; auth 196; crm
+**192**, incl. 102 new: 21 pipelines + 24 pipeline-stages + 57 deals;
+tenancy 28; compliance 26; web 252; ui 21). Migration-safety 76/76
+(unchanged — no migration touched this step). Lint/typecheck/production
+build all clean. `git diff --check` clean, no secrets in changed/new
+files. No test in any other package was touched, weakened, or deleted.
+
+**No 2.2A migration was modified.** All three 2.2A migration files are
+byte-for-byte unchanged from their committed state.
+
+**Milestone 2.2B: DONE** (domain layer only). **Milestone 2.2 overall
+remains open** — no RBAC permission keys, API routes, or UI exist yet for
+Deals/Pipelines; **2.2C has not started.**
+
 ---
 
 ## Overall Phase 1 Recommendation

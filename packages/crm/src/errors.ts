@@ -56,3 +56,50 @@ export class InvalidOwnerError extends CrmError {
     this.name = "InvalidOwnerError";
   }
 }
+
+/** primaryContactId does not resolve to an active contact in the caller's
+ * own organization (Milestone 2.2B). Same indistinguishability rule as
+ * InvalidCompanyRelationshipError. */
+export class InvalidContactRelationshipError extends CrmError {
+  constructor(message: string) {
+    super(message, "invalid_contact_relationship");
+    this.name = "InvalidContactRelationshipError";
+  }
+}
+
+/** pipelineId does not resolve to an active pipeline in the caller's own
+ * organization (Milestone 2.2B). Same indistinguishability rule as
+ * InvalidCompanyRelationshipError. */
+export class InvalidPipelineRelationshipError extends CrmError {
+  constructor(message: string) {
+    super(message, "invalid_pipeline_relationship");
+    this.name = "InvalidPipelineRelationshipError";
+  }
+}
+
+/** stageId does not resolve to an active stage belonging to the supplied
+ * pipelineId in the caller's own organization (Milestone 2.2B). One error
+ * for "does not exist", "belongs to another organization", "is
+ * soft-deleted", AND "belongs to a different pipeline" — mirrors the
+ * database's own two-composite-FK design (deals_stage_org_fk +
+ * deals_stage_pipeline_fk) at the domain layer, with a friendlier typed
+ * error instead of a raw foreign-key-violation surfacing to a caller. */
+export class InvalidStageRelationshipError extends CrmError {
+  constructor(message: string) {
+    super(message, "invalid_stage_relationship");
+    this.name = "InvalidStageRelationshipError";
+  }
+}
+
+/** softDeletePipeline's target is the organization's current active
+ * default pipeline (Milestone 2.2B, closing 2.2A's deferred zero-default
+ * gap at the domain layer). Callers must switch the default to a
+ * different active pipeline via setDefaultPipeline first — this package
+ * deliberately does not auto-select a replacement (no frozen design or
+ * existing architecture supports inventing that selection logic). */
+export class CannotDeleteDefaultPipelineError extends CrmError {
+  constructor(message: string) {
+    super(message, "cannot_delete_default_pipeline");
+    this.name = "CannotDeleteDefaultPipelineError";
+  }
+}

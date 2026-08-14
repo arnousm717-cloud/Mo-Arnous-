@@ -1,8 +1,9 @@
 import type { PoolClient } from "pg";
 import { withTenantContext, type RequestContext } from "@ai-revenue-os/database";
-import { ValidationError, DuplicateContactEmailError, InvalidCompanyRelationshipError } from "./errors";
+import { ValidationError, DuplicateContactEmailError } from "./errors";
 import { decodeCursor, resolveLimit, buildPage, type Page } from "./pagination";
 import { validateOwner } from "./owner-validation";
+import { validateCompanyRelationship } from "./relationship-validation";
 import { runInClientOrTransaction } from "./transaction";
 
 /**
@@ -129,30 +130,6 @@ function validateLifecycleStage(value: string | null): void {
   }
   if (!(LIFECYCLE_STAGES as readonly string[]).includes(value)) {
     throw new ValidationError(`lifecycleStage must be one of ${LIFECYCLE_STAGES.join(", ")}, or null`);
-  }
-}
-
-/**
- * companyId is valid only if null, or if it references a company that
- * (a) exists, (b) belongs to this organization, and (c) is not
- * soft-deleted. All three failure modes collapse to the same
- * InvalidCompanyRelationshipError (2.1D decision 3) — deliberately
- * indistinguishable, so a caller can't use this to probe for another
- * organization's company or a deleted one. Does not weaken the database's
- * own composite FK, which remains the structural guarantee regardless.
- */
-async function validateCompanyRelationship(client: PoolClient, organizationId: string, companyId: string | null): Promise<void> {
-  if (companyId === null) {
-    return;
-  }
-  const r = await client.query(
-    `select 1 from public.companies
-     where id = $1 and organization_id = $2 and deleted_at is null
-     limit 1`,
-    [companyId, organizationId],
-  );
-  if (r.rows.length === 0) {
-    throw new InvalidCompanyRelationshipError("companyId must reference an active company in this organization");
   }
 }
 

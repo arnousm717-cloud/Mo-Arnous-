@@ -22,10 +22,49 @@ export {
   type ListContactsInput,
 } from "./contacts";
 export {
+  createPipeline,
+  getPipelineById,
+  getPipelineByIdIncludingDeleted,
+  listPipelines,
+  updatePipeline,
+  setDefaultPipeline,
+  softDeletePipeline,
+  type Pipeline,
+  type CreatePipelineInput,
+  type UpdatePipelineInput,
+  type ListPipelinesInput,
+} from "./pipelines";
+export {
+  createPipelineStage,
+  getPipelineStageById,
+  getPipelineStageByIdIncludingDeleted,
+  listPipelineStages,
+  updatePipelineStage,
+  softDeletePipelineStage,
+  type PipelineStage,
+  type CreatePipelineStageInput,
+  type UpdatePipelineStageInput,
+} from "./pipeline-stages";
+export {
+  createDeal,
+  getDealById,
+  listDeals,
+  updateDeal,
+  softDeleteDeal,
+  type Deal,
+  type CreateDealInput,
+  type UpdateDealInput,
+  type ListDealsInput,
+} from "./deals";
+export {
   CrmError,
   ValidationError,
   DuplicateContactEmailError,
   InvalidCompanyRelationshipError,
   InvalidOwnerError,
+  InvalidContactRelationshipError,
+  InvalidPipelineRelationshipError,
+  InvalidStageRelationshipError,
+  CannotDeleteDefaultPipelineError,
 } from "./errors";
 export { DEFAULT_LIMIT, MAX_LIMIT, type Page, type Cursor } from "./pagination";
