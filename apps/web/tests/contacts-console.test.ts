@@ -12,6 +12,7 @@ import {
 } from "./crm-api-fixtures";
 import { decideContactsConsoleAccess } from "../app/contacts/access";
 import { listActiveCompanyOptions } from "../app/contacts/company-options";
+import { resolveCompanyDisplayName } from "../app/contacts/company-display";
 import { createContactForResolvedContext } from "../app/contacts/create-logic";
 import { updateContactForResolvedContext } from "../app/contacts/[id]/update-logic";
 import { deleteContactForResolvedContext } from "../app/contacts/[id]/delete-logic";
@@ -472,5 +473,126 @@ describe("security: agency and unaffiliated actors get no Contacts UI access", (
     );
     expect(replay.error).toBeTruthy();
     expect(replay.createdId).toBeUndefined();
+  });
+});
+
+describe("resolveCompanyDisplayName() — staging display bugfix", () => {
+  it("returns the plain name for an active company", async () => {
+    const admin = await createOrgWithRole("org_admin", "display-active-admin");
+    const companyId = await seedCompany(admin.organizationId, { name: "Active Co" });
+    const options = await listActiveCompanyOptions(admin);
+
+    const label = await resolveCompanyDisplayName(admin, companyId, options);
+    expect(label).toBe("Active Co");
+    expect(label).not.toBe(companyId);
+  });
+
+  it("returns '<name> (deleted)' for a soft-deleted company, never the raw id", async () => {
+    const admin = await createOrgWithRole("org_admin", "display-deleted-admin");
+    const companyId = await seedCompany(admin.organizationId, { name: "Staging Test Company" });
+    await handleDeleteCompany(admin.userId, companyId);
+
+    // Options fetched AFTER the delete, matching what the real page does —
+    // the deleted company is correctly absent from the active list.
+    const options = await listActiveCompanyOptions(admin);
+    expect(options.map((o) => o.id)).not.toContain(companyId);
+
+    const label = await resolveCompanyDisplayName(admin, companyId, options);
+    expect(label).toBe("Staging Test Company (deleted)");
+    expect(label).not.toBe(companyId);
+  });
+
+  it("falls back to a generic, still-safe label for a genuinely unresolvable id", async () => {
+    const admin = await createOrgWithRole("org_admin", "display-unresolvable-admin");
+    const options = await listActiveCompanyOptions(admin);
+
+    const label = await resolveCompanyDisplayName(admin, randomUUID(), options);
+    expect(label).toBe("Deleted company");
+  });
+
+  it("never exposes another organization's deleted company name — cross-org resolves to the generic fallback", async () => {
+    const admin = await createOrgWithRole("org_admin", "display-cross-org-admin");
+    const otherOrg = await createOrgWithRole("org_admin", "display-cross-org-other");
+    const otherCompanyId = await seedCompany(otherOrg.organizationId, { name: "Other Org Secret Co" });
+    await handleDeleteCompany(otherOrg.userId, otherCompanyId);
+
+    const options = await listActiveCompanyOptions(admin);
+    const label = await resolveCompanyDisplayName(admin, otherCompanyId, options);
+    expect(label).toBe("Deleted company");
+    expect(label).not.toContain("Other Org Secret Co");
+    expect(label).not.toBe(otherCompanyId);
+  });
+});
+
+describe("editing a contact linked to a soft-deleted company", () => {
+  it("company_id in the database is unchanged after the linked company is soft-deleted", async () => {
+    const admin = await createOrgWithRole("org_admin", "unchanged-companyid-admin");
+    const companyId = await seedCompany(admin.organizationId);
+    const contactId = await seedContact(admin.organizationId, { companyId });
+
+    await handleDeleteCompany(admin.userId, companyId);
+
+    const client = await adminPool.connect();
+    try {
+      const r = await client.query("select company_id from public.contacts where id = $1", [contactId]);
+      expect(r.rows[0].company_id).toBe(companyId);
+    } finally {
+      client.release();
+    }
+  });
+
+  it("an unrelated edit succeeds and does not touch the relationship — the bug this fix closes: previously failed with InvalidCompanyRelationshipError", async () => {
+    const admin = await createOrgWithRole("org_admin", "unrelated-edit-admin");
+    const companyId = await seedCompany(admin.organizationId);
+    const contactId = await seedContact(admin.organizationId, { companyId, firstName: "Original" });
+    await handleDeleteCompany(admin.userId, companyId);
+
+    // Mirrors ContactEditForm's real submission exactly: every field is
+    // resent with its current value (including companyId, from the
+    // <select>'s defaultValue), plus the hidden originalCompanyId marker
+    // the form now also renders.
+    const result = await updateContactForResolvedContext(
+      admin.userId,
+      contactId,
+      formData({
+        idempotencyKey: randomUUID(),
+        firstName: "Changed",
+        companyId,
+        originalCompanyId: companyId,
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.updatedId).toBe(contactId);
+
+    const client = await adminPool.connect();
+    try {
+      const r = await client.query("select first_name, company_id from public.contacts where id = $1", [contactId]);
+      expect(r.rows[0].first_name).toBe("Changed");
+      expect(r.rows[0].company_id).toBe(companyId);
+    } finally {
+      client.release();
+    }
+  });
+
+  it("a genuine reassignment away from the soft-deleted company is still validated as active", async () => {
+    const admin = await createOrgWithRole("org_admin", "reassign-admin");
+    const deletedCompanyId = await seedCompany(admin.organizationId);
+    const contactId = await seedContact(admin.organizationId, { companyId: deletedCompanyId, firstName: "Original" });
+    await handleDeleteCompany(admin.userId, deletedCompanyId);
+
+    // Reassigning to a DIFFERENT still-deleted (or otherwise invalid)
+    // company must still be rejected — omitting companyId is only safe
+    // when it's genuinely unchanged, not a blanket skip of validation.
+    const result = await updateContactForResolvedContext(
+      admin.userId,
+      contactId,
+      formData({
+        idempotencyKey: randomUUID(),
+        firstName: "Original",
+        companyId: deletedCompanyId,
+        originalCompanyId: "",
+      }),
+    );
+    expect(result.error).toBeTruthy();
   });
 });

@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { adminPool, seedAsAdmin, createOrgWithActiveMember, setMembershipStatus } from "./helpers";
 import { closePool } from "@ai-revenue-os/database";
-import { createCompany, getCompanyById, listCompanies, updateCompany, softDeleteCompany } from "../src/companies";
+import {
+  createCompany,
+  getCompanyById,
+  getCompanyByIdIncludingDeleted,
+  listCompanies,
+  updateCompany,
+  softDeleteCompany,
+} from "../src/companies";
 import { ValidationError, InvalidOwnerError } from "../src/errors";
 
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
@@ -135,6 +142,53 @@ describe("getCompanyById", () => {
     await softDeleteCompany({ userId, organizationId, roleKey }, created.id);
     const found = await getCompanyById({ userId, organizationId, roleKey }, created.id);
     expect(found).toBeNull();
+  });
+});
+
+describe("getCompanyByIdIncludingDeleted", () => {
+  it("returns a soft-deleted company, unlike getCompanyById", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const created = await createCompany({ userId, organizationId, roleKey }, { name: "Deleted But Findable Co" });
+    await softDeleteCompany({ userId, organizationId, roleKey }, created.id);
+
+    const viaOrdinary = await getCompanyById({ userId, organizationId, roleKey }, created.id);
+    const viaIncludingDeleted = await getCompanyByIdIncludingDeleted({ userId, organizationId, roleKey }, created.id);
+    expect(viaOrdinary).toBeNull();
+    expect(viaIncludingDeleted?.id).toBe(created.id);
+    expect(viaIncludingDeleted?.name).toBe("Deleted But Findable Co");
+    expect(viaIncludingDeleted?.deletedAt).not.toBeNull();
+  });
+
+  it("still returns an active company normally", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const created = await createCompany({ userId, organizationId, roleKey }, { name: "Active Co" });
+    const found = await getCompanyByIdIncludingDeleted({ userId, organizationId, roleKey }, created.id);
+    expect(found?.id).toBe(created.id);
+    expect(found?.deletedAt).toBeNull();
+  });
+
+  it("remains tenant-scoped — a cross-org id (even soft-deleted) is indistinguishable from nonexistent", async () => {
+    const orgA = await createOrgWithActiveMember();
+    const orgB = await createOrgWithActiveMember();
+    const companyInB = await createCompany(
+      { userId: orgB.userId, organizationId: orgB.organizationId, roleKey: orgB.roleKey },
+      { name: "Org B Secret Co" },
+    );
+    await softDeleteCompany(
+      { userId: orgB.userId, organizationId: orgB.organizationId, roleKey: orgB.roleKey },
+      companyInB.id,
+    );
+
+    const foundByA = await getCompanyByIdIncludingDeleted(
+      { userId: orgA.userId, organizationId: orgA.organizationId, roleKey: orgA.roleKey },
+      companyInB.id,
+    );
+    const foundNonexistent = await getCompanyByIdIncludingDeleted(
+      { userId: orgA.userId, organizationId: orgA.organizationId, roleKey: orgA.roleKey },
+      randomUUID(),
+    );
+    expect(foundByA).toBeNull();
+    expect(foundByA).toEqual(foundNonexistent);
   });
 });
 

@@ -1,6 +1,7 @@
 export {
   createCompany,
   getCompanyById,
+  getCompanyByIdIncludingDeleted,
   listCompanies,
   updateCompany,
   softDeleteCompany,

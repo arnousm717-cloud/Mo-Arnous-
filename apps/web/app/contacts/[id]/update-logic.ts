@@ -35,8 +35,24 @@ export async function updateContactForResolvedContext(
     return { error: "Missing idempotency key." };
   }
 
+  // companyId is deliberately NOT always resent like the other fields.
+  // The edit form always renders the contact's *current* companyId as
+  // the <select>'s value, including when that company has since been
+  // soft-deleted — packages/crm's updateContact re-validates ANY
+  // provided companyId as pointing to a currently-active company
+  // (correct for a genuine new assignment), so blindly resending an
+  // unchanged-but-now-inactive companyId would fail an edit that never
+  // touched the relationship at all. Comparing against the hidden
+  // originalCompanyId lets a genuine reassignment still be validated
+  // while an unrelated edit leaves companyId out of the body entirely —
+  // packages/crm's own hasOwnProperty-based partial-update semantics
+  // then correctly leave it untouched.
+  const submittedCompanyId = toNullableString(formData.get("companyId"));
+  const originalCompanyId = toNullableString(formData.get("originalCompanyId"));
+  const companyIdChanged = submittedCompanyId !== originalCompanyId;
+
   const body = {
-    companyId: toNullableString(formData.get("companyId")),
+    ...(companyIdChanged ? { companyId: submittedCompanyId } : {}),
     firstName: toNullableString(formData.get("firstName")),
     lastName: toNullableString(formData.get("lastName")),
     email: toNullableString(formData.get("email")),

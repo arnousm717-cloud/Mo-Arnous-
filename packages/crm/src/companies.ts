@@ -167,6 +167,31 @@ export async function getCompanyById(ctx: RequestContext & { organizationId: str
   });
 }
 
+/**
+ * Staging bugfix (post-2.1G-C): like getCompanyById, but does not filter
+ * out soft-deleted rows. A contact's stored companyId is deliberately
+ * preserved when its linked company is soft-deleted (2.1B design), so a
+ * display layer needs a tenant-scoped way to resolve that company's name
+ * for a "<name> (deleted)" label instead of falling back to a raw id.
+ * Never used for the active company list/filter/relationship-validation
+ * paths — those must keep excluding soft-deleted companies unchanged;
+ * this function exists solely for read-only display-name resolution.
+ */
+export async function getCompanyByIdIncludingDeleted(
+  ctx: RequestContext & { organizationId: string },
+  id: string,
+): Promise<Company | null> {
+  return withTenantContext(ctx, async (client) => {
+    const r = await client.query<CompanyRow>(
+      `select ${COMPANY_COLUMNS} from public.companies
+       where id = $1 and organization_id = $2`,
+      [id, ctx.organizationId],
+    );
+    const row = r.rows[0];
+    return row ? toCompany(row) : null;
+  });
+}
+
 export async function listCompanies(
   ctx: RequestContext & { organizationId: string },
   input: ListCompaniesInput = {},

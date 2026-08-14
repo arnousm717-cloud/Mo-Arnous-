@@ -1,5 +1,6 @@
 import { redirect, notFound } from "next/navigation";
 import { getAuthenticatedUser, resolveOrganizationContextForUser, can } from "@ai-revenue-os/auth";
+import { getCompanyByIdIncludingDeleted } from "@ai-revenue-os/crm";
 import { handleGetContact } from "../../api/v1/contacts/[id]/handlers";
 import { decideContactsConsoleAccess } from "../access";
 import { listActiveCompanyOptions } from "../company-options";
@@ -20,9 +21,14 @@ interface ContactDetail extends EditableContact {
  * no special-casing, it just maps "not 200" to notFound().
  *
  * A linked company that has since been soft-deleted is deliberately NOT
- * treated as an error here — the contact's companyId is displayed as-is
- * (falling back to the raw id when its name isn't resolvable via the
- * active-only company list), never dropped or nulled by this page.
+ * treated as an error here — the contact's companyId is displayed as-is,
+ * never dropped or nulled by this page. Its name is resolved via
+ * getCompanyByIdIncludingDeleted (tenant-scoped, read-only) when it isn't
+ * in the active company list, rendered as "<name> (deleted)" — never the
+ * raw id. The resolved entry is also merged into the companyOptions
+ * passed to ContactEditForm so its own select shows that label instead
+ * of falling back to its id-only synthetic option, without needing any
+ * change to that component.
  */
 export default async function ContactDetailPage({
   params,
@@ -50,11 +56,30 @@ export default async function ContactDetailPage({
   const actor = { userId, organizationId, roleKey };
   const canUpdate = can(actor, "contacts:update");
   const canDelete = can(actor, "contacts:delete");
-  const companyOptions = canUpdate || contact.companyId ? await listActiveCompanyOptions(actor) : [];
+  let companyOptions = canUpdate || contact.companyId ? await listActiveCompanyOptions(actor) : [];
   const ownerOptions = canUpdate ? await listActiveOwnerOptions(actor) : [];
-  const companyName = contact.companyId
-    ? (companyOptions.find((c) => c.id === contact.companyId)?.name ?? contact.companyId)
-    : null;
+
+  let companyName: string | null = null;
+  if (contact.companyId) {
+    const active = companyOptions.find((c) => c.id === contact.companyId);
+    if (active) {
+      companyName = active.name;
+    } else {
+      const deleted = await getCompanyByIdIncludingDeleted(actor, contact.companyId);
+      if (deleted) {
+        const label = `${deleted.name} (deleted)`;
+        companyName = label;
+        if (canUpdate) {
+          companyOptions = [...companyOptions, { id: deleted.id, name: label }];
+        }
+      } else {
+        // Unresolvable even including soft-deleted rows (e.g. genuinely
+        // orphaned) — never render the raw id; ContactEditForm's own
+        // existing id-only synthetic fallback still preserves the value.
+        companyName = "Deleted company";
+      }
+    }
+  }
 
   const displayName = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.email || "(no name)";
 

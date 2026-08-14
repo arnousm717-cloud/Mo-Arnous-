@@ -6,6 +6,7 @@ import { handleListContacts } from "../api/v1/contacts/handlers";
 import { decideContactsConsoleAccess } from "./access";
 import { listActiveCompanyOptions } from "./company-options";
 import { listActiveOwnerOptions } from "../companies/owner-options";
+import { resolveCompanyDisplayName } from "./company-display";
 import { ContactForm } from "./contact-form";
 import styles from "../companies/companies.module.css";
 
@@ -63,6 +64,26 @@ export default async function ContactsPage({
   ]);
   const companyNameById = new Map(companyOptions.map((c) => [c.id, c.name]));
 
+  // A contact's companyId is deliberately preserved when its linked
+  // company is soft-deleted (2.1B design) — listActiveCompanyOptions
+  // excludes it, so companyNameById alone would be missing an entry for
+  // it. Resolve just those missing ids via the shared helper (tenant-
+  // scoped, includes soft-deleted rows) so the column never falls back
+  // to a raw uuid.
+  const missingCompanyIds = Array.from(
+    new Set(
+      (data.contacts ?? [])
+        .map((row) => row.companyId)
+        .filter((id): id is string => id !== null && !companyNameById.has(id)),
+    ),
+  );
+  const resolvedLabels = await Promise.all(
+    missingCompanyIds.map((id) => resolveCompanyDisplayName(actor, id, companyOptions)),
+  );
+  missingCompanyIds.forEach((id, index) => {
+    companyNameById.set(id, resolvedLabels[index]!);
+  });
+
   const columns: EntityTableColumn<ContactRow>[] = [
     {
       key: "name",
@@ -76,7 +97,10 @@ export default async function ContactsPage({
     {
       key: "company",
       header: "Company",
-      render: (row) => (row.companyId ? (companyNameById.get(row.companyId) ?? row.companyId) : "—"),
+      // Never falls back to the raw id — an unresolvable reference (the
+      // company row itself somehow gone, not merely soft-deleted) still
+      // renders a safe, human-readable placeholder.
+      render: (row) => (row.companyId ? (companyNameById.get(row.companyId) ?? "Deleted company") : "—"),
     },
     { key: "lifecycleStage", header: "Lifecycle Stage", render: (row) => row.lifecycleStage ?? "—" },
     { key: "owner", header: "Owner", render: (row) => row.ownerId ?? "—" },

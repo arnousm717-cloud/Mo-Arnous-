@@ -59,6 +59,12 @@ export function ContactEditForm({
   return (
     <form action={formAction} className={styles.section}>
       <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
+      {/* Lets update-logic.ts distinguish "companyId resubmitted unchanged"
+          from "companyId genuinely reassigned" — only a genuine
+          reassignment should be re-validated as pointing to an active
+          company; an unrelated edit must not fail merely because the
+          contact's already-linked company has since been soft-deleted. */}
+      <input type="hidden" name="originalCompanyId" value={contact.companyId ?? ""} />
 
       {state.error ? (
         <p role="alert" className={styles.formError}>
