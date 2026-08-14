@@ -10,7 +10,7 @@ import {
   seedCompany,
 } from "./crm-api-fixtures";
 import { decideCompaniesConsoleAccess } from "../app/companies/access";
-import { listActiveOwnerOptions } from "../app/companies/owner-options";
+import { listActiveOwnerOptions } from "../app/_shared/owner-options";
 import { createCompanyForResolvedContext } from "../app/companies/create-logic";
 import { updateCompanyForResolvedContext } from "../app/companies/[id]/update-logic";
 import { deleteCompanyForResolvedContext } from "../app/companies/[id]/delete-logic";

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useActionState } from "react";
 import { updateCompanyAction, type UpdateCompanyFormState } from "./actions";
-import type { OwnerOption } from "../owner-options";
+import { withResolvedOwnerFallback, type OwnerOption } from "../../_shared/owner-option";
 import styles from "../companies.module.css";
 
 const initialState: UpdateCompanyFormState = {};
@@ -41,6 +41,14 @@ export function CompanyEditForm({
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const boundAction = updateCompanyAction.bind(null, company.id);
   const [state, formAction, isPending] = useActionState(boundAction, initialState);
+
+  // The currently-assigned owner may no longer hold an active membership
+  // (get_organization_member_identities only ever returns active
+  // members) — without this fallback, a <select> whose defaultValue
+  // matches no <option> silently renders (and, on submit, silently
+  // sends) its first option's value instead, clearing a still-real
+  // owner assignment as a side effect of an unrelated field edit.
+  const ownerSelectOptions = withResolvedOwnerFallback(ownerOptions, company.ownerId);
 
   return (
     <form action={formAction} className={styles.section}>
@@ -118,9 +126,9 @@ export function CompanyEditForm({
         <label htmlFor="edit-company-owner">Owner</label>
         <select id="edit-company-owner" name="ownerId" defaultValue={company.ownerId ?? ""} disabled={isPending}>
           <option value="">No owner</option>
-          {ownerOptions.map((owner) => (
+          {ownerSelectOptions.map((owner) => (
             <option key={owner.userId} value={owner.userId}>
-              {owner.userId}
+              {owner.label}
             </option>
           ))}
         </select>

@@ -4,7 +4,8 @@ import { getCompanyByIdIncludingDeleted } from "@ai-revenue-os/crm";
 import { handleGetContact } from "../../api/v1/contacts/[id]/handlers";
 import { decideContactsConsoleAccess } from "../access";
 import { listActiveCompanyOptions } from "../company-options";
-import { listActiveOwnerOptions } from "../../companies/owner-options";
+import { listActiveOwnerOptions } from "../../_shared/owner-options";
+import { resolveOwnerLabel } from "../../_shared/owner-option";
 import { ContactEditForm, type EditableContact } from "./contact-edit-form";
 import { DeleteContactForm } from "./delete-contact-form";
 import styles from "../../companies/companies.module.css";
@@ -57,7 +58,7 @@ export default async function ContactDetailPage({
   const canUpdate = can(actor, "contacts:update");
   const canDelete = can(actor, "contacts:delete");
   let companyOptions = canUpdate || contact.companyId ? await listActiveCompanyOptions(actor) : [];
-  const ownerOptions = canUpdate ? await listActiveOwnerOptions(actor) : [];
+  const ownerOptions = canUpdate || contact.ownerId ? await listActiveOwnerOptions(actor) : [];
 
   let companyName: string | null = null;
   if (contact.companyId) {
@@ -110,7 +111,7 @@ export default async function ContactDetailPage({
           <dt>Company</dt>
           <dd>{companyName ?? "—"}</dd>
           <dt>Owner</dt>
-          <dd>{contact.ownerId ?? "—"}</dd>
+          <dd>{resolveOwnerLabel(ownerOptions, contact.ownerId) ?? "—"}</dd>
         </dl>
       )}
 

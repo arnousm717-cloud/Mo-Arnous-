@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useActionState } from "react";
 import { createCompanyAction, type CreateCompanyFormState } from "./actions";
-import type { OwnerOption } from "./owner-options";
+import type { OwnerOption } from "../_shared/owner-option";
 import styles from "./companies.module.css";
 
 const initialState: CreateCompanyFormState = {};
@@ -70,7 +70,7 @@ export function CompanyForm({ ownerOptions }: { ownerOptions: OwnerOption[] }): 
           <option value="">No owner</option>
           {ownerOptions.map((owner) => (
             <option key={owner.userId} value={owner.userId}>
-              {owner.userId}
+              {owner.label}
             </option>
           ))}
         </select>

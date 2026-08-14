@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useActionState } from "react";
 import { createContactAction, type CreateContactFormState } from "./actions";
-import type { OwnerOption } from "../companies/owner-options";
+import type { OwnerOption } from "../_shared/owner-option";
 import type { CompanyOption } from "./company-options";
 import styles from "../companies/companies.module.css";
 
@@ -103,7 +103,7 @@ export function ContactForm({
           <option value="">No owner</option>
           {ownerOptions.map((owner) => (
             <option key={owner.userId} value={owner.userId}>
-              {owner.userId}
+              {owner.label}
             </option>
           ))}
         </select>

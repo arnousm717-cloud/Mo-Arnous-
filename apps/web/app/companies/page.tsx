@@ -4,7 +4,8 @@ import { getAuthenticatedUser, resolveOrganizationContextForUser, can } from "@a
 import { EntityTable, type EntityTableColumn } from "@ai-revenue-os/ui";
 import { handleListCompanies } from "../api/v1/companies/handlers";
 import { decideCompaniesConsoleAccess } from "./access";
-import { listActiveOwnerOptions } from "./owner-options";
+import { listActiveOwnerOptions } from "../_shared/owner-options";
+import { resolveOwnerLabel } from "../_shared/owner-option";
 import { CompanyForm } from "./company-form";
 import styles from "./companies.module.css";
 
@@ -68,7 +69,7 @@ export default async function CompaniesPage({
     },
     { key: "domain", header: "Domain", render: (row) => row.domain ?? "—" },
     { key: "industry", header: "Industry", render: (row) => row.industry ?? "—" },
-    { key: "owner", header: "Owner", render: (row) => row.ownerId ?? "—" },
+    { key: "owner", header: "Owner", render: (row) => resolveOwnerLabel(ownerOptions, row.ownerId) ?? "—" },
     { key: "updated", header: "Updated", render: (row) => new Date(row.updatedAt).toLocaleDateString() },
   ];
 
@@ -91,7 +92,7 @@ export default async function CompaniesPage({
               <option value="">All owners</option>
               {ownerOptions.map((owner) => (
                 <option key={owner.userId} value={owner.userId}>
-                  {owner.userId}
+                  {owner.label}
                 </option>
               ))}
             </select>

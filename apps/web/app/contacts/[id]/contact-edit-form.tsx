@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useActionState } from "react";
 import { updateContactAction, type UpdateContactFormState } from "./actions";
-import type { OwnerOption } from "../../companies/owner-options";
+import { withResolvedOwnerFallback, type OwnerOption } from "../../_shared/owner-option";
 import type { CompanyOption } from "../company-options";
 import styles from "../../companies/companies.module.css";
 
@@ -55,6 +55,12 @@ export function ContactEditForm({
     contact.companyId && !companyOptions.some((c) => c.id === contact.companyId)
       ? [...companyOptions, { id: contact.companyId, name: contact.companyId }]
       : companyOptions;
+
+  // Same reasoning as companySelectOptions above, for the owner
+  // relationship: get_organization_member_identities only ever returns
+  // active members, so a since-deactivated owner needs the same
+  // preserved-selection fallback (see ../../_shared/owner-options.ts).
+  const ownerSelectOptions = withResolvedOwnerFallback(ownerOptions, contact.ownerId);
 
   return (
     <form action={formAction} className={styles.section}>
@@ -159,9 +165,9 @@ export function ContactEditForm({
         <label htmlFor="edit-contact-owner">Owner</label>
         <select id="edit-contact-owner" name="ownerId" defaultValue={contact.ownerId ?? ""} disabled={isPending}>
           <option value="">No owner</option>
-          {ownerOptions.map((owner) => (
+          {ownerSelectOptions.map((owner) => (
             <option key={owner.userId} value={owner.userId}>
-              {owner.userId}
+              {owner.label}
             </option>
           ))}
         </select>

@@ -5,7 +5,8 @@ import { EntityTable, type EntityTableColumn } from "@ai-revenue-os/ui";
 import { handleListContacts } from "../api/v1/contacts/handlers";
 import { decideContactsConsoleAccess } from "./access";
 import { listActiveCompanyOptions } from "./company-options";
-import { listActiveOwnerOptions } from "../companies/owner-options";
+import { listActiveOwnerOptions } from "../_shared/owner-options";
+import { resolveOwnerLabel } from "../_shared/owner-option";
 import { resolveCompanyDisplayName } from "./company-display";
 import { ContactForm } from "./contact-form";
 import styles from "../companies/companies.module.css";
@@ -103,7 +104,7 @@ export default async function ContactsPage({
       render: (row) => (row.companyId ? (companyNameById.get(row.companyId) ?? "Deleted company") : "—"),
     },
     { key: "lifecycleStage", header: "Lifecycle Stage", render: (row) => row.lifecycleStage ?? "—" },
-    { key: "owner", header: "Owner", render: (row) => row.ownerId ?? "—" },
+    { key: "owner", header: "Owner", render: (row) => resolveOwnerLabel(ownerOptions, row.ownerId) ?? "—" },
     { key: "updated", header: "Updated", render: (row) => new Date(row.updatedAt).toLocaleDateString() },
   ];
 
@@ -140,7 +141,7 @@ export default async function ContactsPage({
               <option value="">All owners</option>
               {ownerOptions.map((owner) => (
                 <option key={owner.userId} value={owner.userId}>
-                  {owner.userId}
+                  {owner.label}
                 </option>
               ))}
             </select>

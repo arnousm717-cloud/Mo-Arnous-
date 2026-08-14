@@ -1489,6 +1489,146 @@ Milestone 2.1's own requirements.
 
 ---
 
+## Milestone 2.2 — Deals & Pipelines (design record)
+
+Milestone 2.2 is **Deals & Pipelines (kanban)**. Full implementation has
+**not started** — this section records only the frozen design decisions
+made during planning, and the one prerequisite sub-step (2.2-P0) that has
+been implemented so far. No `deals`/`pipelines`/`pipeline_stages` table,
+RLS policy, RBAC key, or API route exists yet.
+
+Six design decisions were frozen before any implementation began:
+
+1. **Owner display** resolved first, as its own prerequisite (2.2-P0,
+   below), rather than deferred into the Deals UI itself.
+2. **Pipeline RBAC**: distinct `pipelines:read/create/update/delete` keys,
+   not folded into `deals:*`.
+3. **Pipeline/stage deletion**: soft delete only (`deleted_at`), no hard
+   `DELETE` path, active selectors exclude deleted rows.
+4. **Default pipeline**: every org gets exactly one seeded "Sales
+   Pipeline" (5 deterministic stages), idempotent, safe for existing orgs.
+5. **Pipeline-stage API**: nested under `/api/v1/pipelines/{id}/stages`.
+6. **Currency**: stored per deal, ISO-4217-shaped, default `EUR`, no FX.
+
+Also frozen: `stage_id` is the single source of truth for a deal's
+won/lost state — `deals.status` is fully derived by the domain layer from
+`stage_id`, never independently settable via the API.
+
+None of decisions 2–6 have been implemented. Only decision 1's
+prerequisite is done.
+
+### Milestone 2.2-P0 — Organization Member Identity Display
+
+**Problem.** Since 2.1, Companies/Contacts owner selectors and the
+"assigned owner" display showed a raw `auth`/`public.users` UUID —
+`public.users`' own RLS is strictly self-scoped (`id = auth.uid()`,
+locked since M1.2), so no existing query path could resolve a
+teammate's name or email for display. This was accepted as a known,
+non-blocking limitation at Milestone 2.1's close and explicitly
+scoped out as a separate prerequisite before Deals (which needs the
+same capability for its own owner field) rather than fixed ad hoc.
+
+**Why a SECURITY DEFINER function, not broadened `public.users` RLS.**
+Broadening `public.users`' RLS policy to let any org member read any
+other org member's row would be a permanent, blast-radius-wide change —
+every future query against `public.users` would inherit it, and every
+column on that table (not just the three an owner selector needs) would
+become newly readable by teammates. A narrow, purpose-built function
+keeps the change local and legible instead: it exposes exactly
+`user_id`/`email`/`full_name`, nothing else, only for organizations the
+caller is independently verified to belong to, and `public.users`' own
+policy is untouched. This mirrors the exact discipline already
+established by `_validate_contact_erasure`/`_validate_user_erasure`:
+`organization_id` is passed as an explicit parameter but is **never**
+trusted as the security boundary by itself — the caller's own active
+membership in that exact organization is independently re-derived
+inside the function via `auth.uid()` on every call.
+
+**Function contract** — one additive migration
+(`20260814090000_create_organization_member_identity_function.sql`,
+32 migrations total):
+
+```sql
+create or replace function public.get_organization_member_identities(p_organization_id uuid)
+returns table (user_id uuid, email text, full_name text)
+language plpgsql
+security definer
+set search_path = public
+```
+
+- Raises if `auth.uid()` is null (caller must be authenticated).
+- Raises if the caller has no `status = 'active'` membership in
+  `p_organization_id` — checked independently of the parameter's value,
+  so it cannot be used to enumerate another org's members.
+- Returns only rows for `status = 'active'` memberships of that exact
+  org — a removed member (the caller's own, or a target row) is excluded.
+- `EXECUTE` revoked from `PUBLIC`, granted only to `authenticated`. The
+  `REVOKE` is redundant with `20260812140000`'s cluster-scoped
+  `ALTER DEFAULT PRIVILEGES FOR ROLE postgres` (which already denies
+  `PUBLIC` execute on any new function `postgres` creates) but is
+  restated explicitly so this migration's own end state is
+  self-contained, matching that same migration's own restatement
+  precedent for grants.
+- `public.users`' own RLS (`id = auth.uid()`) is unchanged — verified
+  both by not touching it and by a dedicated test confirming a user
+  still cannot `SELECT` a teammate's row directly.
+
+**Application layer.** One resource-neutral abstraction, split across
+two files specifically to satisfy Next.js's client/server module
+boundary:
+
+- `apps/web/app/_shared/owner-options.ts` — server-only.
+  `listActiveOwnerOptions(ctx)` calls the function above through the
+  existing `withTenantContext` path (ADR-004 — no new data-access
+  pattern). Imports `@ai-revenue-os/database`, so importing any real
+  (non-type) export from this file into a `"use client"` component pulls
+  `pg` — and transitively Node's `net`/`tls` — into the browser bundle
+  and fails the production build. Discovered by the build itself
+  failing with `Module not found: Can't resolve 'net'`, not by
+  inspection.
+- `apps/web/app/_shared/owner-option.ts` — pure, zero server imports.
+  `OwnerOption` type, `withResolvedOwnerFallback`, `resolveOwnerLabel`
+  (display-label strategy: full_name when non-empty, else email, never
+  a raw UUID). Client components (`company-edit-form.tsx`,
+  `contact-edit-form.tsx`, the two create forms) import only from this
+  file; server components (`page.tsx`/`[id]/page.tsx`) import
+  `listActiveOwnerOptions` from the server-only file and the pure
+  helpers from this one.
+
+Companies and Contacts both consume this same abstraction — no
+duplicated owner-resolution logic between them. RBAC, create/update
+validation, and the API contract are all unchanged; this is a display-
+layer change only.
+
+**Two related bugs fixed proactively** (found while implementing, not
+reported separately):
+- A read-only detail view (e.g. `org_viewer`) previously only fetched
+  owner options when the viewer could also update the record, so it
+  could never resolve an owner's label at all. Fixed by fetching
+  whenever the viewer can update *or* the record has an owner set.
+- An edit form's owner `<select>` whose `defaultValue` matched no
+  `<option>` (owner's membership since deactivated) would silently
+  submit its first option's value on save, clearing a real owner
+  assignment as a side effect of an unrelated field edit —
+  `withResolvedOwnerFallback` keeps the current owner selectable with a
+  safe `"Unknown member"` label instead.
+
+**Verification.** Full monorepo 889/889 (database 297 incl. 12 new
+`organization-member-identities` tests; auth 196; crm 90; tenancy 28;
+compliance 26; web 252 incl. 10 new `owner-options` tests), migration-
+safety 32/32, lint clean, typecheck clean, production build clean
+(after the client/server split above). `git diff --check` clean, no
+secrets in changed/new files.
+
+**Explicitly not done in this step**: 2.2A has not started; no
+`deals`/`pipelines`/`pipeline_stages` table, RLS policy, RBAC key, or
+API route exists; `docs/12`'s milestone map is unchanged.
+
+**Milestone 2.2-P0: DONE.** Milestone 2.2 overall remains open —
+decisions 2–6 above are frozen but unimplemented.
+
+---
+
 ## Overall Phase 1 Recommendation
 
 | Milestone | Verdict |

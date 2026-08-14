@@ -2,7 +2,8 @@ import { redirect, notFound } from "next/navigation";
 import { getAuthenticatedUser, resolveOrganizationContextForUser, can } from "@ai-revenue-os/auth";
 import { handleGetCompany } from "../../api/v1/companies/[id]/handlers";
 import { decideCompaniesConsoleAccess } from "../access";
-import { listActiveOwnerOptions } from "../owner-options";
+import { listActiveOwnerOptions } from "../../_shared/owner-options";
+import { resolveOwnerLabel } from "../../_shared/owner-option";
 import { CompanyEditForm, type EditableCompany } from "./company-edit-form";
 import { DeleteCompanyForm } from "./delete-company-form";
 import styles from "../companies.module.css";
@@ -49,7 +50,7 @@ export default async function CompanyDetailPage({
   const actor = { userId, organizationId, roleKey };
   const canUpdate = can(actor, "companies:update");
   const canDelete = can(actor, "companies:delete");
-  const ownerOptions = canUpdate ? await listActiveOwnerOptions(actor) : [];
+  const ownerOptions = canUpdate || company.ownerId ? await listActiveOwnerOptions(actor) : [];
 
   return (
     <main className={styles.page}>
@@ -72,7 +73,7 @@ export default async function CompanyDetailPage({
           <dt>LinkedIn</dt>
           <dd>{company.linkedinUrl ?? "—"}</dd>
           <dt>Owner</dt>
-          <dd>{company.ownerId ?? "—"}</dd>
+          <dd>{resolveOwnerLabel(ownerOptions, company.ownerId) ?? "—"}</dd>
         </dl>
       )}
 
