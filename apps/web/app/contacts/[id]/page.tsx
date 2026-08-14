@@ -3,7 +3,7 @@ import { getAuthenticatedUser, resolveOrganizationContextForUser, can } from "@a
 import { getCompanyByIdIncludingDeleted } from "@ai-revenue-os/crm";
 import { handleGetContact } from "../../api/v1/contacts/[id]/handlers";
 import { decideContactsConsoleAccess } from "../access";
-import { listActiveCompanyOptions } from "../company-options";
+import { listActiveCompanyOptions } from "../../_shared/company-options";
 import { listActiveOwnerOptions } from "../../_shared/owner-options";
 import { resolveOwnerLabel } from "../../_shared/owner-option";
 import { ContactEditForm, type EditableContact } from "./contact-edit-form";
@@ -24,7 +24,7 @@ interface ContactDetail extends EditableContact {
  * A linked company that has since been soft-deleted is deliberately NOT
  * treated as an error here — the contact's companyId is displayed as-is,
  * never dropped or nulled by this page. Its name is resolved via
- * getCompanyByIdIncludingDeleted (tenant-scoped, read-only) when it isn't
+ * getCompanyByIdIncludingDeleted (tenant-scoped, read-only) when it isn'
  * in the active company list, rendered as "<name> (deleted)" — never the
  * raw id. The resolved entry is also merged into the companyOptions
  * passed to ContactEditForm so its own select shows that label instead

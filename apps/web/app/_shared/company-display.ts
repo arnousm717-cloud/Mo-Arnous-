@@ -2,13 +2,14 @@ import { getCompanyByIdIncludingDeleted } from "@ai-revenue-os/crm";
 import type { CompanyOption } from "./company-options";
 
 /**
- * Staging bugfix (post-2.1G-C). A contact's companyId is deliberately
- * preserved when its linked company is soft-deleted (2.1B design), but
- * listActiveCompanyOptions (and therefore every page's companyOptions)
- * excludes soft-deleted companies — so a naive `find()` against that list
- * alone has no entry for it. Shared by the list page and the detail page
- * so both resolve the same way, rather than duplicating this logic
- * (CLAUDE.md "no duplicate logic").
+ * Milestone 2.2E: moved here unchanged from contacts/company-display.ts —
+ * Deals needs the identical resolution a second time (see
+ * company-options.ts's own comment for the extraction rationale). A
+ * contact's/deal's companyId is deliberately preserved when its linked
+ * company is soft-deleted (2.1B design), but listActiveCompanyOptions
+ * (and therefore every page's companyOptions) excludes soft-deleted
+ * companies — so a naive `find()` against that list alone has no entry
+ * for it.
  *
  * Never falls back to the raw id: an active company gets its plain name;
  * a soft-deleted one is resolved via getCompanyByIdIncludingDeleted

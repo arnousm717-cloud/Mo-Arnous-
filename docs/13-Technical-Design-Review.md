@@ -2184,6 +2184,155 @@ for Deals/Pipelines; **2.2E has not started.**
 
 ---
 
+### Milestone 2.2E — Deals UI
+
+Server Components/Actions only (ADR-004 preserved) — no browser `fetch`
+to the app's own API, no direct browser DB access, no new client-side
+data-access pattern. Every route reuses the exact 2.2D `handlers.ts`
+functions in-process. **PipelineBoard, pipeline-management pages, and
+any schema/RLS/RBAC/API-contract change were explicitly out of scope and
+none was made** — confirmed via `git status`: every changed/new file is
+under `apps/web/app/{deals,_shared,contacts,dashboard}`,
+`apps/web/tests`, `packages/crm/src/contacts.ts`+`index.ts`,
+`packages/crm/tests/contacts.test.ts`, plus this doc. `docs/04` is
+unchanged (no API contract change).
+
+**Routes added**: `/deals` (list with cursor pagination + filters +
+inline create form) and `/deals/{id}` (detail, edit, soft-delete),
+following the exact `access.ts`/`actions.ts`/`*-logic.ts` split proven
+by Companies/Contacts.
+
+**"Deal" column/title — documented UX limitation, not a bug.**
+`public.deals` has no dedicated name/title column (confirmed unchanged
+through 2.2A/2.2B/2.2D). No such field was invented here. The list
+column and detail-page title use `dealDisplayLabel()`: resolved company
+name → resolved primary contact name → a short id-derived label
+(`Deal ${id.slice(0,8)}`) — never a full raw UUID. A future milestone
+adding a genuine `name` column should replace this function's use
+entirely.
+
+**Filters**: `pipelineId`, `stageId`, `ownerId`, `companyId`, `status` —
+cursor pagination only, no search/sort/offset/saved-views (matching the
+frozen 2.2D API contract exactly).
+
+**Create form**: no `status` input anywhere — status is always
+server/domain-derived from the chosen stage (2.2B); there is no code
+path for a client to supply one. Only active company/contact/pipeline/
+stage/owner options are offered. The pipeline→stage `<select>` is a
+presentation-only client-state filter (`selectedPipelineId` +
+`key`-remount on the stage `<select>` so a stale cross-pipeline
+selection can never survive a pipeline switch) — the real authority
+remains `packages/crm`'s `validateStageRelationship`, re-verified
+server-side regardless of what the client rendered.
+
+**Historical-relationship display and preservation (the Milestone 2.1
+Contacts regression class, deliberately not repeated)**: the detail page
+resolves Company/Contact/Pipeline/Stage labels safely — active → name,
+soft-deleted → `"<name> (deleted)"` via a tenant-scoped
+`*IncludingDeleted` read helper, unresolvable → a generic fallback —
+never a raw UUID in the normal flow. The edit form carries five hidden
+`originalXId` markers (`originalCompanyId`, `originalPrimaryContactId`,
+`originalOwnerId`, `originalPipelineId`, `originalStageId`); only a
+field whose submitted value differs from its own original is included
+in the `PATCH` body, so an unrelated edit succeeds even after one of the
+deal's linked relationships has since been soft-deleted/deactivated,
+while a genuine reassignment to a deleted/inactive target is still
+rejected (`400`). Reassigning `pipelineId` always resends `stageId` in
+the same request (re-validated against the *new* pipeline), matching the
+2.2B/2.2D coupling rule.
+
+**New `packages/crm` helper (narrow, explicitly permitted by the
+milestone's own audit clause)**: `getContactByIdIncludingDeleted` —
+mirrors the existing `getCompanyByIdIncludingDeleted` exactly
+(tenant-scoped, read-only, does not filter `deleted_at`; used solely for
+display-name resolution, never for the active list/filter/relationship-
+validation paths). No migration. 3 new `packages/crm` tests.
+
+**Shared-module extraction (mirroring the 2.2-P0 `owner-options`
+precedent)**: `company-options.ts`/`company-display.ts` moved from
+`apps/web/app/contacts/` to `apps/web/app/_shared/` (Deals needed the
+identical capability a second time); `contact-options.ts`/
+`contact-display.ts`/`pipeline-options.ts`/`pipeline-display.ts` created
+directly in `_shared` as new capability. Contacts refactored to consume
+the shared versions with zero behavior change (full, unmodified
+`contacts-console.test.ts` regression — same 40 tests, still green).
+
+**RBAC**: exactly `deals:read/create/update/delete` per the frozen 2.2C
+matrix — `org_admin` full UI, `org_member` no delete control, `org_viewer`
+read-only (no edit/delete controls rendered at all), agency and portal
+roles get no direct `/deals` access (redirected). Unauthorized controls
+are absent from the rendered output, not merely disabled, and every
+mutation re-checks `can()` server-side regardless of what the client
+rendered.
+
+**Idempotency**: reuses the real 2.2D handler path exactly, one stable
+key per mounted form instance (`crypto.randomUUID()` in `useState`
+initializer). Covered by dedicated create/edit retry, changed-payload
+conflict, and authorization-rechecked-before-replay tests.
+
+**Soft-delete**: two-step confirm UI, soft-delete only (`softDeleteDeal`
+in-process) — no physical row removal, matching the non-GDPR delete
+discipline used by Companies/Contacts.
+
+**Dashboard nav**: one minimal `Deals` link added alongside the existing
+Companies/Contacts links — no full sidebar, no Pipelines link yet.
+
+**Styling/accessibility**: CSS Modules only (no Tailwind/shadcn/Radix,
+consistent with the rest of the app), proper `<label>`/`<button>`/
+`role="alert"` usage, uncontrolled `<select>`s use `defaultValue` (never
+per-`<option> selected`).
+
+**Known, honestly-reported limitations**: (1) no dedicated deal name
+field — see "Deal" column note above; (2) this agent is text-only and
+could not visually render the UI in a browser — correctness here rests
+on the automated test suite (lint/typecheck/build/unit+integration
+tests) and careful source review, not on a manual visual pass; a human
+should still eyeball the rendered pages before this ships to real users.
+
+**Verification**: full monorepo **1294/1294** across all 7 tested
+packages (database 391 unchanged — no migration; auth 257 unchanged —
+no RBAC-matrix change; tenancy 28, compliance 26, ui 21 all unchanged;
+crm **195** — +3 for `getContactByIdIncludingDeleted`; web **376** —
++50 for `deals-console.test.ts`, `contacts-console.test.ts` unchanged at
+40). Deals API (30), Pipelines API (19), Pipeline-Stages API (25),
+Companies console (29), Contacts console (40), owner-options (10) all
+re-run unmodified and green as regressions. Migration-safety unchanged
+(no migration added — confirmed via `git status` on
+`packages/database/supabase/migrations/`). Lint/typecheck/production
+build all clean across all 8 packages. `git diff --check` clean, no
+secrets found in changed/new files.
+
+**Incident during implementation, disclosed in full**: a shell `sed`
+command intended to strip trailing whitespace from newly-written files
+used a bracket expression (`[ \t]`) that this environment's `sed`
+parsed as matching space, tab, **or the literal letter "t"** — not tab
+as an escape. This silently stripped a trailing "t" from every line in
+15 touched files that happened to end in "t" with no whitespace at all
+(e.g. `<select` → `<selec`, "just" → "jus", "not" → "no"), corrupting
+~35 lines, including JSX in `deal-edit-form.tsx`, `deal-form.tsx`, and
+`contact-edit-form.tsx` that would have shipped a broken UI. This was
+caught immediately by the next `typecheck` run (malformed JSX tags fail
+to compile) rather than shipping silently. Recovery: (1) reproduced the
+exact bug in isolation to confirm the precise corruption rule; (2)
+rewrote 3 files verbatim from known-good content already present earlier
+in this same session's transcript; (3) for the remaining files, built an
+automated dictionary-assisted scan (every line-ending word checked
+against `/usr/share/dict/words` for "would `word+t` be a real word")
+to generate a candidate list, then manually inspected every candidate
+in full sentence context before changing anything — deliberately
+choosing manual review over blind automated substitution, since several
+corruptions (e.g. "start"→"star", "not"→"no") silently produced other
+valid English words that a purely automated fix could have gotten wrong
+in the opposite direction; (4) re-ran the full corruption scan a second
+time to confirm zero remaining instances, then re-ran the entire
+verification suite (lint/typecheck/1294 tests/build) from a clean state
+to confirm the fix. No corrupted code reached this report as "passing."
+
+**Milestone 2.2E: DONE.** **Milestone 2.2 overall remains open** — no
+Pipeline board, no pipeline-management UI; **2.2F has not started.**
+
+---
+
 ## Overall Phase 1 Recommendation
 
 | Milestone | Verdict |

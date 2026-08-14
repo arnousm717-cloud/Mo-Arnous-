@@ -11,8 +11,8 @@ import {
   seedContact,
 } from "./crm-api-fixtures";
 import { decideContactsConsoleAccess } from "../app/contacts/access";
-import { listActiveCompanyOptions } from "../app/contacts/company-options";
-import { resolveCompanyDisplayName } from "../app/contacts/company-display";
+import { listActiveCompanyOptions } from "../app/_shared/company-options";
+import { resolveCompanyDisplayName } from "../app/_shared/company-display";
 import { createContactForResolvedContext } from "../app/contacts/create-logic";
 import { updateContactForResolvedContext } from "../app/contacts/[id]/update-logic";
 import { deleteContactForResolvedContext } from "../app/contacts/[id]/delete-logic";

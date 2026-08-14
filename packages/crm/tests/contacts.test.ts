@@ -6,6 +6,7 @@ import { createCompany, softDeleteCompany } from "../src/companies";
 import {
   createContact,
   getContactById,
+  getContactByIdIncludingDeleted,
   listContacts,
   updateContact,
   softDeleteContact,
@@ -234,6 +235,45 @@ describe("getContactById", () => {
     const created = await createContact(ctx, { firstName: "Ada" });
     await softDeleteContact(ctx, created.id);
     expect(await getContactById(ctx, created.id)).toBeNull();
+  });
+});
+
+describe("getContactByIdIncludingDeleted", () => {
+  it("returns a soft-deleted contact, unlike getContactById", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const created = await createContact(ctx, { firstName: "Deleted But Findable" });
+    await softDeleteContact(ctx, created.id);
+
+    const viaOrdinary = await getContactById(ctx, created.id);
+    const viaIncludingDeleted = await getContactByIdIncludingDeleted(ctx, created.id);
+    expect(viaOrdinary).toBeNull();
+    expect(viaIncludingDeleted?.id).toBe(created.id);
+    expect(viaIncludingDeleted?.firstName).toBe("Deleted But Findable");
+    expect(viaIncludingDeleted?.deletedAt).not.toBeNull();
+  });
+
+  it("still returns an active contact normally", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const created = await createContact(ctx, { firstName: "Active" });
+    const found = await getContactByIdIncludingDeleted(ctx, created.id);
+    expect(found?.id).toBe(created.id);
+    expect(found?.deletedAt).toBeNull();
+  });
+
+  it("remains tenant-scoped — a cross-org id (even soft-deleted) is indistinguishable from nonexistent", async () => {
+    const orgA = await createOrgWithActiveMember();
+    const orgB = await createOrgWithActiveMember();
+    const ctxB = { userId: orgB.userId, organizationId: orgB.organizationId, roleKey: orgB.roleKey };
+    const contactInB = await createContact(ctxB, { firstName: "Org B Contact" });
+    await softDeleteContact(ctxB, contactInB.id);
+
+    const ctxA = { userId: orgA.userId, organizationId: orgA.organizationId, roleKey: orgA.roleKey };
+    const foundByA = await getContactByIdIncludingDeleted(ctxA, contactInB.id);
+    const nonexistentByA = await getContactByIdIncludingDeleted(ctxA, randomUUID());
+    expect(foundByA).toBeNull();
+    expect(nonexistentByA).toBeNull();
   });
 });
 

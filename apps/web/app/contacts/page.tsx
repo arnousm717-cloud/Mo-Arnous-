@@ -4,10 +4,10 @@ import { getAuthenticatedUser, resolveOrganizationContextForUser, can } from "@a
 import { EntityTable, type EntityTableColumn } from "@ai-revenue-os/ui";
 import { handleListContacts } from "../api/v1/contacts/handlers";
 import { decideContactsConsoleAccess } from "./access";
-import { listActiveCompanyOptions } from "./company-options";
+import { listActiveCompanyOptions } from "../_shared/company-options";
 import { listActiveOwnerOptions } from "../_shared/owner-options";
 import { resolveOwnerLabel } from "../_shared/owner-option";
-import { resolveCompanyDisplayName } from "./company-display";
+import { resolveCompanyDisplayName } from "../_shared/company-display";
 import { ContactForm } from "./contact-form";
 import styles from "../companies/companies.module.css";
 

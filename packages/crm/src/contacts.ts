@@ -208,6 +208,34 @@ export async function getContactById(ctx: RequestContext & { organizationId: str
   });
 }
 
+/**
+ * Milestone 2.2E. Mirrors getCompanyByIdIncludingDeleted exactly (same
+ * tenant-scoped, read-only shape, no new migration) — does not filter out
+ * soft-deleted rows. A deal's primaryContactId is deliberately preserved
+ * when its linked contact is soft-deleted (same 2.1B-established
+ * relationship-preservation design contacts.companyId already follows),
+ * so a display layer needs a tenant-scoped way to resolve that contact's
+ * name for a "<name> (deleted)" label instead of falling back to a raw
+ * id. Never used for the active contact list/filter/relationship-
+ * validation paths — those must keep excluding soft-deleted contacts
+ * unchanged; this function exists solely for read-only display-name
+ * resolution.
+ */
+export async function getContactByIdIncludingDeleted(
+  ctx: RequestContext & { organizationId: string },
+  id: string,
+): Promise<Contact | null> {
+  return withTenantContext(ctx, async (client) => {
+    const r = await client.query<ContactRow>(
+      `select ${CONTACT_COLUMNS} from public.contacts
+       where id = $1 and organization_id = $2`,
+      [id, ctx.organizationId],
+    );
+    const row = r.rows[0];
+    return row ? toContact(row) : null;
+  });
+}
+
 export async function listContacts(
   ctx: RequestContext & { organizationId: string },
   input: ListContactsInput = {},

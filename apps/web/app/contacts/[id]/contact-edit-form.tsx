@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useActionState } from "react";
 import { updateContactAction, type UpdateContactFormState } from "./actions";
 import { withResolvedOwnerFallback, type OwnerOption } from "../../_shared/owner-option";
-import type { CompanyOption } from "../company-options";
+import type { CompanyOption } from "../../_shared/company-options";
 import styles from "../../companies/companies.module.css";
 
 const initialState: UpdateContactFormState = {};

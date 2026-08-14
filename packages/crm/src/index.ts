@@ -13,6 +13,7 @@ export {
 export {
   createContact,
   getContactById,
+  getContactByIdIncludingDeleted,
   listContacts,
   updateContact,
   softDeleteContact,
