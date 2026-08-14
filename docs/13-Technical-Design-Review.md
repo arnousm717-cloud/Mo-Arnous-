@@ -1399,9 +1399,93 @@ clean; secret scan clean. No transient/flaky failures this run.
 imported from), no `packages/ui` change, no new permission, no schema/
 migration/RLS change, no staging/Production operation.
 
-**Remaining in Milestone 2.1**: 2.1G-D (final UI/adversarial/visual
-verification) only. 2.1G and Milestone 2.1 as a whole remain **not**
-complete.
+**Remaining at this point**: 2.1G-D (final UI/adversarial/visual
+verification) — completed next, see the Milestone 2.1 closeout below.
+
+### Milestone 2.1 — Final Closeout
+
+2.1G-D (final UI/adversarial/visual verification, commit `d4e6d49`)
+re-audited the full Companies/Contacts implementation from source rather
+than trusting prior reports, found and fixed one small non-architectural
+responsive CSS gap (`flex-wrap` missing on the filter/confirm-action
+rows) and two stale documentation claims in `docs/04`, and added 4
+idempotency-conflict tests closing a genuine UI-layer coverage gap —
+monorepo 877/877, migration-safety 31/31, GO for closing 2.1G.
+
+The Milestone 2.1 final closeout audit (commit `9515b0a`) independently
+re-verified schema, RLS/tenancy, RBAC, `packages/crm`, the API,
+idempotency (including a fresh re-run of the real two-connection
+concurrency test), DSR/compliance dispatch, and both UI features from
+source — no blocking gap found, one more small `docs/04` staleness
+corrected (the general error-envelope/idempotency-routing principles had
+never been revisited to match what actually shipped). GO for staging
+deployment.
+
+**Staging live verification surfaced one real bug, since found, fixed,
+and re-verified live**: a Contact linked to a Company that had since
+been soft-deleted rendered the Company column as the raw `companyId`
+UUID instead of a readable label — and, found while proving the fix's
+own required regression coverage (not assumed from the bug report
+alone), any edit to such a contact, even one touching an unrelated
+field, failed outright with `InvalidCompanyRelationshipError`, because
+the edit form always resent the unchanged `companyId` and
+`updateContact` correctly-but-too-broadly re-validates every *provided*
+`companyId` as currently active. Fixed at commit `b814e27`:
+
+- A new, tenant-scoped, read-only `getCompanyByIdIncludingDeleted`
+  (`packages/crm`) resolves a soft-deleted company's name for display —
+  never used by the active list/filter/relationship-validation paths,
+  which continue to exclude soft-deleted companies exactly as before.
+- Both the Contacts list and detail pages render `"<name> (deleted)"` —
+  never the raw id, even for a genuinely unresolvable reference (generic
+  `"Deleted company"` fallback).
+- The edit form now carries a hidden `originalCompanyId` marker so
+  `update-logic.ts` can tell "resubmitted unchanged" apart from "a
+  genuine reassignment" — only a real reassignment is validated as
+  pointing to an active company; an unrelated edit no longer touches the
+  relationship at all, closing the update-failure bug. A genuine
+  reassignment to an invalid company is still correctly rejected
+  (verified by a dedicated test).
+- No schema, migration, RLS, RBAC, or API-contract change. Monorepo
+  887/887 (877 + 3 new `packages/crm` tests + 7 new UI-console tests),
+  migration-safety 31/31, lint/typecheck/build clean.
+
+**Manually verified live in staging** (Vercel Preview deployment for
+commit `b814e27`, Ready): logged in with the staging test account;
+`/contacts` loaded; the previously-affected contact ("Company Relation
+Test") remained visible with its Company column reading exactly
+`"Staging Test Company (deleted)"` — never the raw UUID — on both the
+list and detail pages; an unrelated field edit (phone → `0612345678`)
+saved successfully with no `InvalidCompanyRelationshipError`; the
+contact remained linked to the deleted company; a full browser refresh
+confirmed both the phone change and the company relationship persisted.
+
+**Operational note, not a deviation from this milestone's own scope**:
+the Vercel project is currently configured to auto-deploy every push to
+`main` as a Production deployment — commit `b814e27` therefore also
+became visible as a Production deployment automatically, purely as a
+side effect of the ordinary `main` push already covered by this
+milestone's approved commit/push gates. No deliberate Production
+deployment, promotion, redeploy, alias change, environment-variable
+change, schema change, migration, or Supabase Production operation was
+performed. This auto-deploy behavior is a standing fact about the
+current Vercel project configuration, not something this milestone's
+work introduced or changed.
+
+**Owner-display limitation**: unchanged from the 2.1G-B/C/D entries
+above and the final closeout audit — Companies/Contacts owner
+filters/selects still show raw user UUIDs (`public.users` RLS remains
+self-scoped only). Non-blocking, tracked separately, not touched by
+this fix.
+
+**Milestone 2.1: CLOSED.** Every gate has now passed: implementation
+complete, final source-level audit PASS, staging database state
+verified live with zero drift, and — following this fix — staging
+*application* behavior for the one issue staging verification actually
+surfaced is now also confirmed PASS live, not just by local tests.
+Remaining work (owner display names) is explicitly non-blocking and
+tracked as its own future, separately-scoped item, not part of
+Milestone 2.1's own requirements.
 
 ---
 
