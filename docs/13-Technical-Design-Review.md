@@ -1627,6 +1627,187 @@ API route exists; `docs/12`'s milestone map is unchanged.
 **Milestone 2.2-P0: DONE.** Milestone 2.2 overall remains open —
 decisions 2–6 above are frozen but unimplemented.
 
+### Milestone 2.2A — Deals & Pipelines database foundation
+
+Schema, RLS, grants, and default-pipeline seeding only — no domain layer
+(`packages/crm` deals module), no RBAC permission keys, no API routes, no
+UI. **2.2B has not started.**
+
+**Migrations** (three, additive only):
+
+1. `20260814100000_create_pipelines_deals_schema.sql` — `public.pipelines`,
+   `public.pipeline_stages`, `public.deals`; adds
+   `contacts_organization_id_id_key unique (organization_id, id)` to
+   `public.contacts` (required so `deals.primary_contact_id` has a
+   composite-unique target, mirroring `companies`' own pre-existing one);
+   `set_updated_at()` triggers on all three new tables (the same M1.2/2.1B
+   trigger function, no new helper).
+2. `20260814100100_enable_pipelines_deals_rls.sql` — RLS + grants, exact
+   companies/contacts precedent: `SELECT`/`INSERT`/`UPDATE` own-org
+   policies, no `DELETE` policy, `authenticated` gets exactly
+   `SELECT, INSERT, UPDATE`, `anon` gets nothing.
+3. `20260814100200_create_seed_default_pipeline_function.sql` —
+   `seed_default_pipeline()`, its integration into
+   `create_organization_with_owner()`, and the existing-organization
+   backfill.
+
+**Schema** (`docs/03-Database-Architecture.md` §2.2's target columns,
+implemented exactly):
+
+- `pipelines(id, organization_id, name, is_default, deleted_at,
+  created_at, updated_at)` + `unique(organization_id, id)`.
+- `pipeline_stages(id, organization_id, pipeline_id, name, sort_order,
+  probability, is_won_stage, is_lost_stage, deleted_at, created_at,
+  updated_at)` + `unique(organization_id, id)` + `unique(pipeline_id,
+  id)`.
+- `deals(id, organization_id, company_id, primary_contact_id, pipeline_id,
+  stage_id, amount, currency, probability, expected_close_date, status,
+  owner_id, deleted_at, created_at, updated_at)`.
+
+**Composite-FK / tenant-safety design** — every cross-table reference is
+a composite FK, never a bare single-column one, matching
+`contacts_company_org_fk`'s precedent exactly:
+
+- `pipeline_stages.pipeline_id` → `pipelines(organization_id, id)`
+  (`pipeline_stages_pipeline_org_fk`, `ON DELETE CASCADE` — stages have no
+  meaningful existence without their pipeline, unlike `deals.company_id`'s
+  genuinely optional relationship).
+- `deals.company_id` → `companies(organization_id, id)`, `ON DELETE SET
+  NULL` (nullable, same as `contacts.company_id`).
+- `deals.primary_contact_id` → `contacts(organization_id, id)`, `ON DELETE
+  SET NULL` (nullable).
+- `deals.pipeline_id` → `pipelines(organization_id, id)`
+  (`deals_pipeline_org_fk`, tenant-safety half) — `ON DELETE RESTRICT`
+  (explicit; `pipeline_id` is `NOT NULL`, so `SET NULL` is not an option).
+- `deals.stage_id` → `pipeline_stages(organization_id, id)`
+  (`deals_stage_org_fk`, tenant-safety half) — `ON DELETE RESTRICT`.
+- `deals.(pipeline_id, stage_id)` → `pipeline_stages(pipeline_id, id)`
+  (`deals_stage_pipeline_fk`, pipeline-**membership**-safety half — proves
+  the stage actually belongs to *this deal's own pipeline*, not merely to
+  the same organization; without it, a stage from a different pipeline in
+  the same org could be assigned to a deal) — `ON DELETE RESTRICT`.
+
+All six adversarial scenarios the frozen plan required (cross-org
+company/contact/pipeline/stage, same-org-wrong-pipeline stage) were
+verified empirically against a real local Postgres before being written
+into the permanent test suite, and are covered by dedicated tests.
+
+**CHECK constraints**: `deals_currency_format` (`currency ~
+'^[A-Z]{3}$'`, format-only, not a fixed enum — decision 6), default
+`'EUR'`; `deals_probability_range` / `pipeline_stages_probability_range`
+(`NULL` or `0..100`); `deals_status_allowed` (`open`/`won`/`lost`);
+`pipeline_stages_not_won_and_lost` (`NOT (is_won_stage AND
+is_lost_stage)`).
+
+**RLS**: `organization_id = current_org()` on `SELECT`/`INSERT`/`UPDATE`,
+no `DELETE` policy, on all three tables — identical shape to
+companies/contacts. No agency roll-up view added (out of 2.2A's scope).
+
+**Grants**: `authenticated` → `SELECT, INSERT, UPDATE` only, verified via
+`information_schema.role_table_grants`; `anon` → nothing; `TRUNCATE`/
+`REFERENCES`/`TRIGGER` already denied to both roles by M1.9's
+schema-scoped `ALTER DEFAULT PRIVILEGES` (proven to correctly cover
+future tables, unlike the function-privilege analog from 2.2-P0) — no
+explicit revoke needed for these three new tables.
+
+**`seed_default_pipeline(p_organization_id uuid)`** — internal privileged
+helper, deliberately **not** a general `authenticated` RPC (unlike
+2.2-P0's `get_organization_member_identities`, which performs its own
+independent membership check before returning anything). This function
+takes a bare organization id with **no caller-identity check of its
+own** — its only two legitimate callers,
+`create_organization_with_owner()` and this migration's own backfill
+loop, both run as `postgres`, which owns this function and therefore
+retains full rights on it regardless of any `GRANT`/`REVOKE` state
+(ordinary PostgreSQL owner-privilege semantics — not a bypass this
+migration introduces). `EXECUTE` is revoked from `PUBLIC` and
+**deliberately not granted to `authenticated`** — verified empirically
+(`has_function_privilege` for `anon`/`authenticated`/`PUBLIC` all `false`)
+and by a dedicated test proving an authenticated session gets
+`permission denied` calling it directly, even for its own organization.
+`SECURITY DEFINER`, `SET search_path = public` — confirmed via
+`pg_proc`.
+
+Ensures exactly one active default "Sales Pipeline" (5 stages: Lead(10) /
+Qualified(20) / Proposal(30) / Won(40, `is_won_stage`) / Lost(50,
+`is_lost_stage`)) for a given organization. Idempotent — a second call
+no-ops if an active default already exists (verified by a dedicated
+test).
+
+**Concurrency**: uses `pg_advisory_xact_lock(hashtext(p_organization_id::
+text))` to serialize concurrent callers targeting the *same*
+organization, released automatically at the end of the calling
+transaction — deliberately not a check-then-insert-and-catch-the-
+unique-violation pattern, which would leave a caller's transaction in
+Postgres's aborted state without an explicit `SAVEPOINT`. Proven with a
+genuine two-real-connection test: both concurrent calls for the same new
+organization complete successfully (`fulfilled`, not one erroring), and
+the result is exactly one pipeline with exactly 5 stages — never a
+duplicate or partial set. Two *different* organizations never block each
+other (separate lock keys).
+
+**`create_organization_with_owner()` integration**: extended via
+`CREATE OR REPLACE` (same signature, OID/grants preserved) — one line
+added (`perform public.seed_default_pipeline(v_org_id);`) immediately
+before the final `RETURN`, after the existing
+organization/membership/`default_organization_id`/`membership.created`-
+event writes. If seeding raises, the entire transaction rolls back with
+it — the same atomicity guarantee already proven for the
+`membership.created` event insert (same function, same transaction). All
+prior behavior (NULL-safe caller-identity guard, membership creation,
+`default_organization_id`, event emission) is unchanged and re-verified
+by a dedicated regression test.
+
+**Existing-organization backfill**: a `DO` block at the end of the third
+migration calls the *same* `seed_default_pipeline()` function once per
+existing organization — never a second, duplicated definition of "Sales
+Pipeline" + 5 stages. Ran against zero pre-existing organizations in this
+local environment (a freshly-exercised database has none at any given
+time); the mechanism itself — seeding an organization with zero prior
+pipeline rows, exactly the pre-2.2A shape — is proven by a dedicated
+test.
+
+**Default-pipeline invariant — stated precisely, not overstated**: the
+partial unique index (`pipelines_org_active_default_idx`, `WHERE
+is_default AND deleted_at IS NULL`) guarantees **at most one** active
+default pipeline per organization, always, regardless of write path. The
+seed/signup integration guarantees **at least one** at
+organization-creation/backfill time. Neither, nor both together,
+guarantees **exactly one forever**: 2.2A ships the table grants required
+by this step's own spec (`authenticated` has raw `UPDATE` on
+`pipelines`), but no RBAC/domain-layer rule yet exists to stop an
+authenticated caller from setting the organization's only default
+pipeline's `is_default` to `false`, or soft-deleting it — both were
+proven to **succeed today** by dedicated tests, producing zero active
+default pipelines for that organization. This is a known, deliberate gap
+for 2.2B (or a later step) to close, not a bug fixed here — enforcing
+"exactly one forever" at the DB layer (e.g. a trigger blocking the last
+active default from being unset/deleted) would be materially more
+machinery than this step's frozen scope approved, so it was not added.
+
+**Status-derivation boundary — stated precisely, not overstated**:
+`deals.status` has no `CHECK`/trigger tying it to
+`pipeline_stages.is_won_stage`/`is_lost_stage`. Direct SQL can create a
+schema-valid deal with `status = 'open'` referencing a won-flagged
+`stage_id` — proven by a dedicated test. Deriving/enforcing that
+relationship from `stage_id` (the frozen Milestone 2.2 design: `stage_id`
+is the single source of truth, `status` is domain-layer-derived, never
+independently settable via the API) is explicitly the future 2.2B
+domain layer's (`packages/crm`) responsibility, never this schema.
+
+**Verification**: full monorepo 1003/1003 across all 7 tested packages
+(database 390, incl. 90 new: 50 schema + 22 RLS + 18 seed-function/
+concurrency/invariant tests; auth 196; crm 90; tenancy 28; compliance 26;
+web 252; ui 21) — the only new tests added this step are the 90 in
+`packages/database`; no test in any other package was touched,
+weakened, or deleted. Migration-safety 76/76 (3 new migration files, all
+classified safe, no override needed), lint/typecheck/production build
+all clean, `git diff --check` clean, no secrets in new files.
+
+**Milestone 2.2A: DONE** (database foundation only). **Milestone 2.2
+overall remains open** — no domain layer, RBAC keys, API routes, or UI
+exist yet for Deals/Pipelines; **2.2B has not started.**
+
 ---
 
 ## Overall Phase 1 Recommendation
