@@ -3048,10 +3048,128 @@ migrations; secret scan clean.
 
 **Milestone 2.3C: COMPLETE.**
 
+### Milestone 2.3D — Activities, Notes, Tags & Taggings API layer
+
+`apps/web/app/api/v1` routes only — no domain-logic change
+(`packages/crm` untouched), no RBAC-matrix change (`packages/auth`
+untouched), no migration, no UI. **2.3E has not started.**
+
+**8 new routes**, following the established `handlers.ts`/`route.ts`
+split exactly (Companies/Contacts/Deals/Pipelines precedent):
+
+- `GET /api/v1/activities`, `POST /api/v1/activities`
+- `GET /api/v1/activities/{id}`, `PATCH /api/v1/activities/{id}`, `DELETE /api/v1/activities/{id}`
+- `GET /api/v1/notes`, `POST /api/v1/notes`
+- `GET /api/v1/notes/{id}`, `PATCH /api/v1/notes/{id}`, `DELETE /api/v1/notes/{id}`
+- `GET /api/v1/tags`, `POST /api/v1/tags`
+- `GET /api/v1/tags/{id}`, `PATCH /api/v1/tags/{id}`, `DELETE /api/v1/tags/{id}`
+- `GET /api/v1/taggings`, `POST /api/v1/taggings`
+- `DELETE /api/v1/taggings/{id}` — **no GET-by-id, no PATCH** (Taggings
+  have no update operation at any layer, 2.3A schema through 2.3C RBAC)
+
+**Taggings authorization**: no `taggings:*` permission family exists
+(2.3C frozen design) — `taggings/handlers.ts` imports `resolveActor`
+directly from `../tags/handlers.ts` rather than duplicating it, checking
+`tags:read`/`tags:create`/`tags:delete` respectively, mirroring the
+`pipeline_stages` → `pipelines:*` precedent exactly (a relationship/child
+resource authorizes under its owning resource's keys). No idempotency
+machinery on `POST /api/v1/taggings` (deliberate) — duplicate creation is
+already uniquely constrained at the database level
+(`taggings_tag_id_taggable_type_taggable_id_key`) and maps to 409 through
+that constraint alone.
+
+**Malformed-UUID hardening (closes the known 2.3B open point)**: before
+this milestone, no route in the entire API — including Companies/
+Contacts/Deals/Pipelines — validated UUID *shape* anywhere; a
+malformed-but-non-empty string (e.g. `"not-a-uuid"`) reached Postgres
+unvalidated and surfaced as a raw `invalid input syntax for type uuid`
+error. A new shared helper, `apps/web/app/api/v1/_shared/uuid.ts`
+(`isValidUuid`, reusing `packages/crm/src/pagination.ts`'s own
+`UUID_PATTERN` regex verbatim rather than inventing a second one), is
+used by every new Activities/Notes/Tags/Taggings route to reject this
+input before it ever reaches a query. Classification: a malformed route
+`:id` → 404, extending the existing "cross-org and nonexistent are
+indistinguishable" doctrine to a third case (never reveals *why* a path
+identifier didn't resolve); a malformed relationship/filter UUID
+(`relatedToId`, `tagId`, `taggableId`, `createdBy`) → 400, matching how a
+well-formed-but-invalid relationship value already maps to 400 elsewhere.
+Deliberately scoped to only the new routes — the identical pre-existing
+gap on Companies/Contacts/Deals/Pipelines is a known, unaddressed,
+out-of-scope issue, not silently fixed here and not worsened.
+
+**Error mapping** mirrors the established `mapCrmError` `instanceof`
+pattern exactly: `ValidationError` and the relevant
+`InvalidXRelationshipError`s → 400 (relationship fields are body/query
+inputs here, never a path resource identifier); `DuplicateTagNameError`/
+`DuplicateTaggingError` → 409; cross-org or nonexistent `:id` → 404,
+response body byte-identical to the nonexistent case (tested); an
+invalid/cross-org relationship attempt never distinguishes "target
+belongs to another org" from "target doesn't exist" (tested,
+response-body-equality assertion). No raw Postgres error, SQLSTATE, or
+stack trace ever reaches a response body.
+
+**Mass-assignment protection**: every `extractCreateInput`/
+`extractUpdateInput` is an explicit allowlist, never a body spread —
+`id`/`organizationId`/`organization_id`/`createdBy`/`created_by`/
+`createdAt`/`created_at`/`updatedAt`/`updated_at`/`deletedAt`/
+`deleted_at` have no extraction code path at all. `createdBy` on
+Activities/Notes is always `actor.userId` (packages/crm's own 2.3B
+sourcing), never read from the request body. Activities/Notes `PATCH`
+additionally has no `relatedToType`/`relatedToId` extraction — a
+smuggled value in the body has no effect (tested). Taggings has no
+update endpoint at all.
+
+**Tests**: `activities-api.test.ts` (29), `notes-api.test.ts` (30),
+`tags-api.test.ts` (23), `taggings-api.test.ts` (26) — 108 new tests, all
+passing on first run. `crm-api-fixtures.ts` extended with
+`seedActivity`/`seedNote`/`seedTag`/`seedTagging` (direct-SQL, matching
+every existing `seed*` helper's own convention). Coverage: the full
+auth/RBAC/tenancy/IDOR matrix per resource (mirroring `deals-api.test.ts`
+exactly — org_admin full CRUD, org_member no-delete, org_viewer
+read-only, pure-agency-actor and unaffiliated-user 403, cross-org
+GET/PATCH/DELETE 404 with response-body equality against the
+nonexistent-id case, collection list never leaking another
+organization's rows); Taggings' specific authorization-mapping proof
+(`GET`→`tags:read`, `POST`→`tags:create`, `DELETE`→`tags:delete`,
+`org_member` denied `DELETE` specifically because it lacks
+`tags:delete`, `org_viewer` denied `POST`/`DELETE`); all 9 required
+cross-org relationship-create-attack cases (Activity/Note/Tagging ×
+Company/Contact/Deal) plus Tagging→cross-org-Tag; malformed-UUID
+hardening for every `:id`/body/filter UUID input; mass-assignment
+injection tests; the GDPR historical-read proof (`GET`/list correctly
+serialize a row with `relatedToId`/`subject`/`body` null and
+`relatedToType` still `'contact'`, without erroring); soft-delete-vs-
+physical-delete proofs (Activities/Notes/Tags survive in the database
+after "delete" with `deletedAt` set; a deleted Tagging is genuinely gone
+from the table); idempotency replay/conflict/no-header/demoted-actor
+tests for Activities/Notes/Tags, and the deliberate-no-idempotency proof
+for Taggings (two identical POSTs both attempt real inserts, the second
+collides with the unique constraint → 409, row count stays 1).
+Same-origin enforcement verified by structural source inspection against
+every new mutating `route.ts` (byte-for-byte pattern match against
+`deals/route.ts`) rather than a new per-resource integration test class
+— matching the established repository convention exactly, where
+`isSameOrigin()` itself has exactly one dedicated unit-test location
+(`organizations-api.test.ts`) and no existing resource (including Deals)
+re-tests it per route.
+
+**Verification**: `pnpm audit --audit-level=high` clean; lint/typecheck
+clean, 8/8 packages; `pnpm test` all green — database 477/477, auth
+343/343, ui 39/39, compliance 32/32, crm 310/310, web 548/548 (up from
+440, +108), tenancy 28/28; `pnpm build` clean, exactly 8 new routes in
+the build's own route inventory (`/api/v1/activities`,
+`/api/v1/activities/[id]`, `/api/v1/notes`, `/api/v1/notes/[id]`,
+`/api/v1/tags`, `/api/v1/tags/[id]`, `/api/v1/taggings`,
+`/api/v1/taggings/[id]`); `git diff --check` clean; migration-safety gate
+pass, unchanged at 40 migrations (confirms no migration added); secret
+scan clean.
+
+**Milestone 2.3D: COMPLETE.**
+
 **Milestone 2.3: IN PROGRESS.** 2.3A (database foundation + GDPR/
-retention wiring), 2.3B (domain layer), and 2.3C (RBAC) are implemented
-and verified; 2.3D–2.3G (API, UI, GDPR UI copy, tests-across-the-stack
-closeout) have not started.
+retention wiring), 2.3B (domain layer), 2.3C (RBAC), and 2.3D (API layer)
+are implemented and verified; 2.3E–2.3G (UI, GDPR UI copy,
+tests-across-the-stack closeout) have not started.
 
 ---
 

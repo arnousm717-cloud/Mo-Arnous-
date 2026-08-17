@@ -222,3 +222,78 @@ export async function seedPipelineWithStage(
   const stageId = await seedPipelineStage(organizationId, pipelineId, { name: overrides.stageName ?? "Seeded Stage" });
   return { pipelineId, stageId };
 }
+
+/** Milestone 2.3D. Direct-SQL seed, matching every other seed*'s own
+ * convention exactly. */
+export async function seedActivity(
+  organizationId: string,
+  relatedToType: "company" | "contact" | "deal",
+  relatedToId: string,
+  overrides: Partial<{ type: string; subject: string | null; createdBy: string | null }> = {},
+): Promise<string> {
+  const client = await adminPool.connect();
+  try {
+    const r = await client.query<{ id: string }>(
+      `insert into public.activities (organization_id, type, related_to_type, related_to_id, subject, created_by)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [organizationId, overrides.type ?? "call", relatedToType, relatedToId, overrides.subject ?? null, overrides.createdBy ?? null],
+    );
+    return r.rows[0]!.id;
+  } finally {
+    client.release();
+  }
+}
+
+export async function seedNote(
+  organizationId: string,
+  relatedToType: "company" | "contact" | "deal",
+  relatedToId: string,
+  overrides: Partial<{ body: string | null; createdBy: string | null }> = {},
+): Promise<string> {
+  const client = await adminPool.connect();
+  try {
+    const r = await client.query<{ id: string }>(
+      `insert into public.notes (organization_id, related_to_type, related_to_id, body, created_by)
+       values ($1, $2, $3, $4, $5) returning id`,
+      [organizationId, relatedToType, relatedToId, overrides.body ?? "Seeded note body", overrides.createdBy ?? null],
+    );
+    return r.rows[0]!.id;
+  } finally {
+    client.release();
+  }
+}
+
+export async function seedTag(
+  organizationId: string,
+  overrides: Partial<{ name: string; color: string | null }> = {},
+): Promise<string> {
+  const client = await adminPool.connect();
+  try {
+    const r = await client.query<{ id: string }>(
+      "insert into public.tags (organization_id, name, color) values ($1, $2, $3) returning id",
+      [organizationId, overrides.name ?? "Seeded Tag", overrides.color ?? null],
+    );
+    return r.rows[0]!.id;
+  } finally {
+    client.release();
+  }
+}
+
+export async function seedTagging(
+  organizationId: string,
+  tagId: string,
+  taggableType: "company" | "contact" | "deal",
+  taggableId: string,
+): Promise<string> {
+  const client = await adminPool.connect();
+  try {
+    const r = await client.query<{ id: string }>(
+      `insert into public.taggings (organization_id, tag_id, taggable_type, taggable_id)
+       values ($1, $2, $3, $4) returning id`,
+      [organizationId, tagId, taggableType, taggableId],
+    );
+    return r.rows[0]!.id;
+  } finally {
+    client.release();
+  }
+}
