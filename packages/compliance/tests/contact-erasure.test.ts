@@ -91,6 +91,33 @@ describe("data_retention_policies: contacts platform default", () => {
   });
 });
 
+describe("data_retention_policies: Milestone 2.3A activities/notes platform defaults", () => {
+  it.each(["activities", "notes"])(
+    "a platform-default retention row exists for %s with the approved 2555-day value",
+    async (dataType) => {
+      const row = await seedAsAdmin(async (client) => {
+        const r = await client.query(
+          "select retention_days from public.data_retention_policies where data_type = $1 and organization_id is null",
+          [dataType],
+        );
+        return r.rows[0];
+      });
+      expect(row).toBeDefined();
+      expect(row.retention_days).toBe(2555);
+    },
+  );
+
+  it("no retention row exists for tags or taggings — they are not governed by a time-based retention window", async () => {
+    const rows = await seedAsAdmin(async (client) => {
+      const r = await client.query(
+        "select data_type from public.data_retention_policies where data_type in ('tags', 'taggings')",
+      );
+      return r.rows;
+    });
+    expect(rows).toEqual([]);
+  });
+});
+
 describe("previewContactErasure: own-organization success and non-mutation", () => {
   it("previews an own-org contact successfully with no PII in the response", async () => {
     const admin = await createAuthUser("preview-admin");
@@ -532,11 +559,212 @@ describe("deal relationship: primary_contact_id survives contact erasure", () =>
   });
 });
 
+describe("Milestone 2.3A: direct-contact Activities/Notes/Taggings ↔ contact erasure", () => {
+  it("an Activity/Note directly related to the erased contact survives scrubbed; a Tagging directly targeting it is physically removed; the Tag itself is untouched", async () => {
+    const admin = await createAuthUser("activities-notes-tags-admin");
+    const orgId = await createOrgWithOwner(admin, "Contact Erasure Activities Org");
+    const contact = await createContact(orgId, { firstName: "Referenced By Activity And Note" });
+
+    const activity = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string; created_at: string }>(
+        `insert into public.activities (organization_id, type, related_to_type, related_to_id, subject, body)
+         values ($1, 'call', 'contact', $2, 'Discovery call', 'Discussed pricing') returning id, created_at`,
+        [orgId, contact.id],
+      );
+      return r.rows[0]!;
+    });
+    const note = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string; created_at: string }>(
+        `insert into public.notes (organization_id, related_to_type, related_to_id, body)
+         values ($1, 'contact', $2, 'Prefers email over phone') returning id, created_at`,
+        [orgId, contact.id],
+      );
+      return r.rows[0]!;
+    });
+    const tag = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        "insert into public.tags (organization_id, name) values ($1, 'VIP') returning id",
+        [orgId],
+      );
+      return r.rows[0]!;
+    });
+    const tagging = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        "insert into public.taggings (organization_id, tag_id, taggable_type, taggable_id) values ($1, $2, 'contact', $3) returning id",
+        [orgId, tag.id, contact.id],
+      );
+      return r.rows[0]!;
+    });
+
+    const dsr = await fileDataSubjectRequest(
+      { userId: admin, organizationId: orgId, roleKey: "org_admin" },
+      { subjectType: "contact", subjectId: contact.id, requestType: "delete" },
+    );
+    const result = await executeContactErasure({ userId: admin }, dsr.id);
+    expect(result.targetContactId).toBe(contact.id);
+
+    // Contact: physically gone.
+    expect(await rowExistsIn("public.contacts", "id", contact.id)).toBe(false);
+
+    // Activity: still exists, not soft-deleted, related_to_type still
+    // 'contact' (non-identifying category metadata, deliberately
+    // preserved), related_to_id/subject/body NULL, unrelated fields
+    // (type, created_at) unchanged.
+    const activityAfter = await seedAsAdmin(async (client) => {
+      const r = await client.query(
+        "select type, related_to_type, related_to_id, subject, body, deleted_at, created_at from public.activities where id = $1",
+        [activity.id],
+      );
+      return r.rows[0];
+    });
+    expect(activityAfter).toBeDefined();
+    expect(activityAfter.deleted_at).toBeNull();
+    expect(activityAfter.type).toBe("call");
+    expect(activityAfter.related_to_type).toBe("contact");
+    expect(activityAfter.related_to_id).toBeNull();
+    expect(activityAfter.subject).toBeNull();
+    expect(activityAfter.body).toBeNull();
+    expect(new Date(activityAfter.created_at).toISOString()).toBe(new Date(activity.created_at).toISOString());
+
+    // Note: still exists, not soft-deleted, related_to_type still
+    // 'contact', related_to_id/body NULL, created_at unchanged.
+    const noteAfter = await seedAsAdmin(async (client) => {
+      const r = await client.query(
+        "select related_to_type, related_to_id, body, deleted_at, created_at from public.notes where id = $1",
+        [note.id],
+      );
+      return r.rows[0];
+    });
+    expect(noteAfter).toBeDefined();
+    expect(noteAfter.deleted_at).toBeNull();
+    expect(noteAfter.related_to_type).toBe("contact");
+    expect(noteAfter.related_to_id).toBeNull();
+    expect(noteAfter.body).toBeNull();
+    expect(new Date(noteAfter.created_at).toISOString()).toBe(new Date(note.created_at).toISOString());
+
+    // Tagging: physically removed (no free text, no historical value once
+    // its target is erased — 2.3 frozen design decision).
+    expect(await rowExistsIn("public.taggings", "id", tagging.id)).toBe(false);
+
+    // Tag: entirely untouched — a tag is an organization-defined label,
+    // never personal data about the erased individual.
+    expect(await rowExistsIn("public.tags", "id", tag.id)).toBe(true);
+
+    // No dangling reference to the erased contact's UUID remains anywhere
+    // in this organization's direct-relationship columns — the exact
+    // property the nullable-related_to_id/taggable_id GDPR correction was
+    // designed to guarantee.
+    const danglingReferences = await seedAsAdmin(async (client) => {
+      const activitiesHit = await client.query(
+        "select id from public.activities where organization_id = $1 and related_to_id = $2",
+        [orgId, contact.id],
+      );
+      const notesHit = await client.query(
+        "select id from public.notes where organization_id = $1 and related_to_id = $2",
+        [orgId, contact.id],
+      );
+      const taggingsHit = await client.query(
+        "select id from public.taggings where organization_id = $1 and taggable_id = $2",
+        [orgId, contact.id],
+      );
+      return [...activitiesHit.rows, ...notesHit.rows, ...taggingsHit.rows];
+    });
+    expect(danglingReferences).toEqual([]);
+  });
+
+  it("an Activity/Note related to a Deal (not the erased Contact) is entirely untouched by contact erasure — Category A scope is precise, not blanket", async () => {
+    const admin = await createAuthUser("activities-scope-admin");
+    const orgId = await createOrgWithOwner(admin, "Contact Erasure Scope Org");
+    const contact = await createContact(orgId, { firstName: "Erased, Unrelated To Deal Activity" });
+
+    const { pipelineId, stageId } = await seedAsAdmin(async (client) => {
+      const pipeline = await client.query<{ id: string }>(
+        "insert into public.pipelines (organization_id, name, is_default) values ($1, $2, false) returning id",
+        [orgId, "Scope Test Pipeline"],
+      );
+      const stage = await client.query<{ id: string }>(
+        "insert into public.pipeline_stages (organization_id, pipeline_id, name, sort_order) values ($1, $2, $3, $4) returning id",
+        [orgId, pipeline.rows[0]!.id, "Scope Test Stage", 10],
+      );
+      return { pipelineId: pipeline.rows[0]!.id, stageId: stage.rows[0]!.id };
+    });
+    const deal = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        "insert into public.deals (organization_id, pipeline_id, stage_id) values ($1, $2, $3) returning id",
+        [orgId, pipelineId, stageId],
+      );
+      return r.rows[0]!;
+    });
+    // Category B (docs/13 Milestone 2.3): this Activity's free text
+    // mentions the contact by name, but is related_to a Deal, not the
+    // Contact directly — this is precisely the known, documented,
+    // unaddressed limitation. Asserting it survives untouched proves
+    // Category A's cleanup is scoped exactly to direct relationships,
+    // not a blanket sweep.
+    const dealActivity = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        `insert into public.activities (organization_id, type, related_to_type, related_to_id, subject, body)
+         values ($1, 'note', 'deal', $2, 'Mentions Erased, Unrelated To Deal Activity', 'Category B text') returning id`,
+        [orgId, deal.id],
+      );
+      return r.rows[0]!;
+    });
+
+    const dsr = await fileDataSubjectRequest(
+      { userId: admin, organizationId: orgId, roleKey: "org_admin" },
+      { subjectType: "contact", subjectId: contact.id, requestType: "delete" },
+    );
+    await executeContactErasure({ userId: admin }, dsr.id);
+    expect(await rowExistsIn("public.contacts", "id", contact.id)).toBe(false);
+
+    const after = await seedAsAdmin(async (client) => {
+      const r = await client.query(
+        "select related_to_type, related_to_id, subject, body from public.activities where id = $1",
+        [dealActivity.id],
+      );
+      return r.rows[0];
+    });
+    expect(after.related_to_type).toBe("deal");
+    expect(after.related_to_id).toBe(deal.id);
+    expect(after.subject).toBe("Mentions Erased, Unrelated To Deal Activity");
+    expect(after.body).toBe("Category B text");
+  });
+});
+
 describe("transactional safety: audit-write failure rolls back the entire erasure", () => {
-  it("a forced audit_logs insert failure rolls back the contact delete and the DSR status update together", async () => {
+  it("a forced audit_logs insert failure rolls back the contact delete, the Activity/Note/Taggings mutations, and the DSR status update together", async () => {
     const admin = await createAuthUser("chaos-admin");
     const orgId = await createOrgWithOwner(admin, "Contact Chaos Org");
     const contact = await createContact(orgId);
+    const activity = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        `insert into public.activities (organization_id, type, related_to_type, related_to_id, subject, body)
+         values ($1, 'call', 'contact', $2, 'Pre-rollback subject', 'Pre-rollback body') returning id`,
+        [orgId, contact.id],
+      );
+      return r.rows[0]!;
+    });
+    const note = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        "insert into public.notes (organization_id, related_to_type, related_to_id, body) values ($1, 'contact', $2, 'Pre-rollback note body') returning id",
+        [orgId, contact.id],
+      );
+      return r.rows[0]!;
+    });
+    const tag = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        "insert into public.tags (organization_id, name) values ($1, 'Chaos Tag') returning id",
+        [orgId],
+      );
+      return r.rows[0]!;
+    });
+    const tagging = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ id: string }>(
+        "insert into public.taggings (organization_id, tag_id, taggable_type, taggable_id) values ($1, $2, 'contact', $3) returning id",
+        [orgId, tag.id, contact.id],
+      );
+      return r.rows[0]!;
+    });
     const dsr = await fileDataSubjectRequest(
       { userId: admin, organizationId: orgId, roleKey: "org_admin" },
       { subjectType: "contact", subjectId: contact.id, requestType: "delete" },
@@ -584,6 +812,30 @@ describe("transactional safety: audit-write failure rolls back the entire erasur
     });
     expect(dsrAfter.status).toBe("pending");
     expect(dsrAfter.completed_at).toBeNull();
+
+    // Milestone 2.3A: the same rollback must cover the new Activity/Note
+    // scrub and the Tagging delete — none of them are a separate
+    // transaction, so a failure anywhere in the function rolls all of it
+    // back together, exactly like the pre-existing contact delete above.
+    const activityAfter = await seedAsAdmin(async (client) => {
+      const r = await client.query(
+        "select related_to_id, subject, body from public.activities where id = $1",
+        [activity.id],
+      );
+      return r.rows[0];
+    });
+    expect(activityAfter.related_to_id).toBe(contact.id);
+    expect(activityAfter.subject).toBe("Pre-rollback subject");
+    expect(activityAfter.body).toBe("Pre-rollback body");
+
+    const noteAfter = await seedAsAdmin(async (client) => {
+      const r = await client.query("select related_to_id, body from public.notes where id = $1", [note.id]);
+      return r.rows[0];
+    });
+    expect(noteAfter.related_to_id).toBe(contact.id);
+    expect(noteAfter.body).toBe("Pre-rollback note body");
+
+    expect(await rowExistsIn("public.taggings", "id", tagging.id)).toBe(true);
   });
 });
 

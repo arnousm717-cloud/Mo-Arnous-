@@ -2648,7 +2648,250 @@ non-blocking.
 **Milestone 2.2: PASS — CLOSED.** Every gate has passed: implementation
 complete (2.2-P0 through 2.2G), staging database state verified live
 with zero drift, and production functional behavior confirmed manually
-by the project owner. Milestone 2.3 has not started.
+by the project owner. Milestone 2.3 is in progress — see the next
+section.
+
+---
+
+## Milestone 2.3 — Activities, Notes & Tags
+
+### Frozen design
+
+Four new tables: `activities`, `notes`, `tags`, `taggings`. Design and
+scope were frozen across two design-only sessions before any code was
+written, and are recorded here for reference rather than re-derived from
+the migrations:
+
+- **Activities vs. Notes**: kept as two distinct concepts. `activities`
+  are typed, chronological timeline events (`call`/`email`/`meeting`/
+  `note`/`task`, with `due_at`/`completed_at`); `notes` are a persistent,
+  freely-editable annotation with no timeline semantics. A `type='note'`
+  activity and a standalone note are deliberately not the same thing.
+- **Polymorphic associations**: `activities.related_to_type`/
+  `related_to_id` and `notes.related_to_type`/`related_to_id` target
+  exactly `company`/`contact`/`deal`; `taggings.taggable_type`/
+  `taggable_id` targets the same three. Naming is intentionally
+  inconsistent between the two families (`related_to_*` vs.
+  `taggable_*`) — not a stylistic slip, a deliberate signal that
+  Activities/Notes and Taggings are different kinds of relationship.
+  Postgres cannot express a type-conditional foreign key
+  (docs/03-Database-Architecture.md §3), so target existence/tenancy for
+  these columns is a `packages/crm` domain-layer responsibility, deferred
+  to Milestone 2.3B — this migration proves only the allowed-type CHECK
+  and the row's own `organization_id`, never target existence.
+- **Taggings is the one deliberate exception to this project's
+  soft-delete convention**: no `deleted_at`, no `updated_at`, no update
+  trigger, and — uniquely among the four new tables — `authenticated`
+  holds a real `DELETE` grant with a matching RLS policy. A tagging is a
+  relationship row, not a standalone historical CRM record; removing one
+  is always a physical, tenant-scoped delete. This mirrors the one other
+  table in the project with the same shape, `idempotency_keys`
+  (`idempotency_keys_delete_own`, 20260813110000). The accepted residual
+  risk — a same-org caller with direct DB/PostgREST access, bypassing the
+  application's `tags:*` RBAC entirely, could delete a tagging without
+  permission — is judged LOW severity (no cross-tenant exposure, no PII,
+  fully reversible by re-applying the tag) and is documented in the RLS
+  migration's own comments rather than redesigned.
+- **`organization_id` on `taggings`**: required, not derived via a join.
+  No table in this project derives tenancy indirectly — RLS is
+  structurally dependent on every tenant-owned table carrying its own
+  `organization_id` — so `taggings` follows the same rule as every other
+  table.
+
+### GDPR correction (pre-implementation)
+
+The first frozen design specified `activities.related_to_id`/
+`notes.related_to_id` as normal non-null columns, which directly
+contradicted the standing "no dangling identifiers after erasure" rule
+the moment a direct-contact GDPR erasure needed to leave the row in
+place. The corrected, implemented design:
+
+- `related_to_id` (activities, notes) is **nullable at the DB level**,
+  reserved exclusively for the contact-erasure path. Ordinary
+  create/update (2.3B, not yet built) must always supply a non-null
+  value — enforced at the domain/API layer only, never a DB `CHECK`,
+  because a `CHECK (related_to_id is not null)` would block the erasure
+  function's own `UPDATE`.
+- `related_to_type` is deliberately **preserved** (e.g. stays `'contact'`)
+  on erasure — non-identifying category metadata, not a personal
+  identifier, useful for audit/timeline rendering ("this was once linked
+  to a Contact").
+- `notes.body` was corrected from the originally-frozen `NOT NULL` to
+  **nullable**, for the identical reason — discovered during 2.3A's own
+  pre-implementation audit, before any migration was written.
+- No `erased_at` marker was added: `related_to_type='contact' AND
+  related_to_id IS NULL` is unambiguous by construction, since only the
+  compliance function's own code path can produce that combination.
+- UI copy (2.3D, not yet built) must render this state as **"Erased
+  contact"**, never "Deleted contact" — "deleted" is reserved project-wide
+  for the recoverable soft-delete pattern.
+- Taggings are **physically removed**, not nulled, on direct-contact
+  erasure — a tagging carries no free text and `taggable_id` is `NOT
+  NULL` by schema, so nulling was never an option regardless.
+- **Category A vs. Category B**, explicitly scoped: this milestone closes
+  Category A only — a direct relational reference
+  (`related_to_type`/`taggable_type = 'contact'` and the erased contact's
+  own id). Category B — an Activity/Note related to a *different* entity
+  (a Company or Deal) whose free-text `subject`/`body` happens to mention
+  the erased contact by name — is a known, deliberately unaddressed
+  compliance limitation. Reliable detection of personal-data mentions in
+  free text requires NLP/semantic scanning, explicitly out of scope for
+  Milestone 2.3. Verified by a dedicated regression test (see below) that
+  proves such an Activity survives completely untouched.
+
+### 2.3A — Database foundation + GDPR/retention wiring
+
+**Migrations** (all forward-only; no previously-committed migration was
+edited):
+
+- `20260817090000_create_activities_notes_tags_schema.sql` — the four
+  tables, exactly as designed above, plus `set_updated_at` triggers
+  (activities/notes/tags only — not taggings) and indexes
+  (`*_org_active_idx` partial indexes on `deleted_at is null`,
+  `*_org_related_idx`/`*_org_taggable_idx` for polymorphic lookups,
+  `tags_org_active_name_idx` for case-insensitive per-org active-name
+  uniqueness).
+- `20260817090100_enable_activities_notes_tags_rls.sql` — RLS enabled on
+  all four; `authenticated` gets exactly SELECT/INSERT/UPDATE on
+  activities/notes/tags (no DELETE) and exactly SELECT/INSERT/DELETE on
+  taggings (no UPDATE); `anon` gets nothing. Matches the
+  companies/contacts/pipelines/deals precedent exactly, with taggings'
+  DELETE exception documented inline.
+- `20260817090200_extend_contact_erasure_and_retention.sql` — extends
+  `execute_contact_erasure()` (2.1C) via `CREATE OR REPLACE` to scrub
+  directly-related Activities/Notes (`related_to_id`/free-text columns
+  set to NULL, row survives) and physically delete directly-related
+  Taggings, all inside the function's existing single transaction; adds
+  `data_retention_policies` rows for `activities`/`notes`
+  (`retention_days=2555`, matching the `contacts` platform default) per
+  the docs/10 §8 standing rule that a new personal-data table's retention
+  wiring lands in the same PR that introduces the table. `tags` and
+  `taggings` deliberately have no retention row — tags are not personal
+  data, and taggings are governed by physical deletion at erasure time,
+  not a time window.
+
+**A self-caught regression, found and fixed before commit.** While
+writing this migration's `CREATE OR REPLACE FUNCTION
+public.execute_contact_erasure`, the caller-identity guard was copied
+from the function's *original* Milestone 2.1C source
+(`20260812130000_create_contact_erasure_functions.sql`) instead of its
+actual latest-applied body. That original guard —
+`if p_caller_user_id is null or p_caller_user_id <> auth.uid() then` —
+is NULL-unsafe: `<>` against a NULL `auth.uid()` evaluates to SQL NULL,
+and PL/pgSQL treats a NULL `IF` condition as false, so the guard silently
+does not fire. This exact defect was found and fixed project-wide in
+`20260812140000_harden_function_execution_privileges.sql`, which rewrote
+`execute_contact_erasure()` (among six sibling functions) to the
+NULL-safe form (`auth.uid() is null OR p_caller_user_id is null OR
+p_caller_user_id IS DISTINCT FROM auth.uid()`). This migration's first
+draft, by copying from the pre-hardening source, silently reverted that
+fix for this one function — reintroducing a path where an
+authenticated-but-unidentified session (`role=authenticated`, no
+resolvable JWT `sub`) supplying any real org_admin's user id could
+irreversibly erase that org's contact, bypassing caller-identity
+verification entirely.
+
+This was caught by the project's own full verification suite, run before
+commit as required by this milestone's process: the pre-existing
+regression test `function-execution-privilege-hardening.test.ts` >
+"execute_contact_erasure rejects an unauthenticated caller impersonating
+a real org_admin, and the contact survives" failed. The failure was
+confirmed empirically (not just read from the SQL) — reproduced twice
+against local Postgres, isolated down to the byte-identical original
+guard text with no other code involved, and confirmed absent from the
+correctly-guarded sibling `preview_contact_erasure`. Fixed by restoring
+the NULL-safe guard form in this migration (now the only version that
+has ever shipped in this migration file — the vulnerable intermediate
+state was never committed). The local dev database was reset
+(`supabase db reset`) and every migration replayed from the corrected
+files to guarantee the applied state matches the committed source
+exactly, with no drift from an intermediate manual patch. Not reachable
+through the application's normal request path (real Supabase JWTs always
+carry a `sub` when `role=authenticated`) — only via direct DB/PostgREST
+access bypassing the API — but treated with full severity given the
+irreversible, PII-hard-delete nature of the function it sits on.
+
+**Tests added** (all real Postgres, never mocked, following this
+project's established fixture/RLS-adversarial conventions):
+
+- `packages/database/tests/activities-notes-tags-schema.test.ts` (51
+  tests) — columns/types/nullability/defaults, `type`/`related_to_type`/
+  `taggable_type` CHECKs, the nullable-`related_to_id`/nullable-`body`
+  GDPR-path proof, `organization_id` FKs, `created_by` `ON DELETE SET
+  NULL` FKs, `tags_org_active_name_idx` case-insensitive uniqueness
+  (including reuse-after-soft-delete and per-org independence),
+  `taggings_tag_org_fk` composite tenant-safety FK (cross-org rejection
+  + cascade delete when a tag is removed), the `unique(tag_id,
+  taggable_type, taggable_id)` duplicate-tagging guard, indexes, and
+  `updated_at` triggers.
+- `packages/database/tests/activities-notes-tags-rls.test.ts` (31 tests)
+  — cross-tenant SELECT/UPDATE isolation on all four tables, `WITH CHECK`
+  spoofing/mutation prevention, the exact `authenticated`
+  SELECT/INSERT/UPDATE (no DELETE) grant matrix for
+  activities/notes/tags, `anon` zero-grant proof, genuine `permission
+  denied` on DELETE/TRUNCATE for activities/notes/tags, and a dedicated
+  section proving taggings' DELETE exception precisely: same-org DELETE
+  succeeds, cross-org DELETE affects zero rows, UPDATE is rejected at the
+  grant level (no policy exists at all).
+- `packages/compliance/tests/contact-erasure.test.ts` — three new
+  `describe` blocks using the real `executeContactErasure()` path (never
+  a direct SQL delete): (1) full end-to-end proof — seeds a Contact with
+  a directly-related Activity, Note, Tag, and Tagging, erases the
+  contact, and asserts the contact is physically gone, the Activity/Note
+  survive not-soft-deleted with `related_to_type` unchanged but
+  `related_to_id`/free-text columns NULL and all unrelated fields
+  (`type`, `created_at`) intact, the Tagging is physically gone, the Tag
+  itself is untouched, and no reference to the erased contact's UUID
+  remains anywhere in the org's `related_to_id`/`taggable_id` columns;
+  (2) the Category B scope-boundary proof — an Activity related to a Deal
+  whose free text mentions the erased contact by name survives completely
+  untouched, proving Category A cleanup is precise, not a blanket sweep;
+  (3) the existing audit-write-failure chaos/rollback test was extended
+  to also seed an Activity/Note/Tagging referencing the contact and
+  assert all three remain in their exact pre-erasure state after the
+  forced rollback, proving the 2.3A mutations share the same single
+  transaction as the pre-existing contact delete. Also added: platform-
+  default retention-row tests for `activities`/`notes`
+  (`retention_days=2555`) and a proof that no retention row exists for
+  `tags`/`taggings`.
+- `packages/database/tests/compliance-schema.test.ts` — the pre-existing
+  "platform-default retention rows visible" test's hardcoded expected
+  list was updated to include `activities`/`notes` in sorted order — a
+  necessary, expected consequence of this milestone's own retention rows,
+  not a defect.
+
+**Verification (local dev Postgres, forced/uncached, after the guard fix
+and a full `supabase db reset` replay of all 34 migrations from the
+corrected source files):**
+
+- Migration safety gate: pass, 39 migrations checked.
+- `pnpm test`: **all 7 tested packages green** — database 476/476
+  (including the previously-failing `function-execution-privilege-
+  hardening.test.ts`, now 41/41), compliance 32/32, crm 195/195, web
+  440/440, tenancy 28/28, auth and ui unaffected and green.
+- `pnpm lint`: clean, 0 warnings/errors, all 8 packages.
+- `pnpm typecheck`: clean, 0 errors, all 8 packages.
+- `pnpm build`: clean; no new routes (2.3A is database-only — no API, no
+  UI, per this step's explicit scope).
+- `git diff --check`: clean. Secret scan of every new/changed file: clean
+  (only the well-known local Supabase dev connection string, identical to
+  every existing test file in this project).
+
+**Explicitly out of scope for 2.3A, deferred to later 2.3 sub-steps**:
+`packages/crm` domain modules (createActivity/createNote/createTag/
+addTagging and polymorphic target validation), RBAC permission keys
+(`activities:*`/`notes:*`/`tags:*`), API routes, `ActivityTimeline` UI,
+Category B free-text GDPR scanning (not planned at all, a permanent
+documented limitation). The DB layer does **not** validate that a
+polymorphic target (a `related_to_id`/`taggable_id`) actually exists or
+belongs to the caller's organization — that is 2.3B's responsibility;
+this migration proves only the allowed-type CHECK and the row's own
+`organization_id`.
+
+**Milestone 2.3: IN PROGRESS.** 2.3A (database foundation + GDPR/
+retention wiring) is implemented and verified; 2.3B–2.3G (domain layer,
+RBAC, API, UI, GDPR UI copy, tests-across-the-stack closeout) have not
+started.
 
 ---
 

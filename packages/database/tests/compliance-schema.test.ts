@@ -311,7 +311,18 @@ describe("data_retention_policies: read-only, platform defaults visible", () => 
     // "contacts" joined the platform-default set in Milestone 2.1C
     // (docs/13-Technical-Design-Review.md "Milestone 2.1") — the first
     // CRM-table retention policy, alongside the three M1.6 originals.
-    expect(rows.map((r) => r.data_type)).toEqual(["audit_logs", "consent_records", "contacts", "data_subject_requests"]);
+    // "activities"/"notes" joined in Milestone 2.3A (docs/13 "Milestone
+    // 2.3") — "tags"/"taggings" are deliberately absent, see that
+    // migration's own comment (tags are not personal data; taggings are
+    // governed by physical deletion, not a time-based retention window).
+    expect(rows.map((r) => r.data_type)).toEqual([
+      "activities",
+      "audit_logs",
+      "consent_records",
+      "contacts",
+      "data_subject_requests",
+      "notes",
+    ]);
   });
 });
 
