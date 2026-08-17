@@ -1,0 +1,70 @@
+/*
+ * Milestone 2.3E. Plain CSS Modules — no Tailwind/shadcn. Chips wrap
+ * naturally at any viewport width — no fixed widths, no horizontal
+ * scrolling.
+ */
+
+.wrapper {
+  --tag-chip-bg: #f4f5f7;
+  --tag-chip-text: #374151;
+  --tag-chip-border: #e5e7eb;
+  --tag-empty-text: #6b7280;
+
+  font-family: var(--font-sans, inherit);
+  width: 100%;
+  max-width: 100%;
+}
+
+.emptyMessage {
+  font-size: 0.875rem;
+  color: var(--tag-empty-text);
+  margin: 0 0 0.5rem 0;
+}
+
+.chipList {
+  list-style: none;
+  margin: 0 0 0.5rem 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background: var(--tag-chip-bg);
+  color: var(--tag-chip-text);
+  border: 1px solid var(--tag-chip-border);
+  border-radius: 999px;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.8125rem;
+  max-width: 100%;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--tag-chip-border);
+}
+
+.chipLabel {
+  overflow-wrap: break-word;
+}
+
+.chipRemove {
+  display: inline-flex;
+  align-items: center;
+}
+
+.addControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}

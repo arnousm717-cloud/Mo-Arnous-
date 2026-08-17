@@ -3166,10 +3166,167 @@ scan clean.
 
 **Milestone 2.3D: COMPLETE.**
 
+### Milestone 2.3E — Activity Timeline UI (Company/Contact/Deal integration)
+
+The first UI integration for Activities, Notes, and Tags/Taggings —
+`docs/07-UI-UX-System.md`'s own `ActivityTimeline` ("polymorphic timeline
+for activities/notes on a contact/company/deal detail page") plus a
+minimal Tags area, embedded on all three existing detail pages. No
+schema/migration/RLS/GDPR-erasure-function/RBAC-matrix/API-contract
+change — UI only. **2.3F has not started.**
+
+**Documentation contradiction found and resolved before implementation**:
+`docs/07` §2/§5 states the UI is "Built on shadcn/ui primitives (Radix +
+Tailwind)." This is stale/aspirational, not what is actually
+implemented — verified directly: zero `tailwind.config.*` anywhere in
+the repo, zero shadcn/Radix/Tailwind dependency anywhere, and the two
+composites `docs/07` itself names as already built (`EntityTable`,
+`PipelineBoard`) are both plain React + CSS Modules. `ActivityTimeline`
+and the new `TagList` composite follow the real, actual, locked
+architecture (CSS Modules, `packages/ui/src/`), matching `EntityTable`'s
+own file shape exactly — not `docs/07`'s stale framing.
+
+**Architecture — one shared implementation, not three** (frozen 2.3E
+decision): `packages/ui/src/activity-timeline.tsx` +
+`activity-timeline.module.css` and `tag-list.tsx` + `tag-list.module.css`
+are presentation-only (no data fetching, no `can()`, no tenant context —
+same discipline as `EntityTable`/`PipelineBoard`). All
+data-fetching/RBAC/mutation logic lives in one shared web integration
+area, `apps/web/app/_shared/activity-timeline/`, parameterized by
+`relatedToType: "company" | "contact" | "deal"` — Companies/Contacts/
+Deals detail pages each supply only their own `relatedToType`/
+`relatedToId`/`returnPath`/`actor` and render `<ActivityTimelineSection>`.
+No per-record-type duplication of Server Actions, forms, or mutation
+logic — genuinely identical business logic across all three, per
+CLAUDE.md's "no duplicate logic" rule.
+
+**Shared files**: `loader.ts` (merges Activities + Notes into one
+chronological stream, reusing the 2.3D API handlers directly in-process,
+ADR-004 — never a raw domain call), `activity-logic.ts`/`note-logic.ts`/
+`tag-logic.ts` (Server-Action-body FormData parsing, mirroring
+`contacts/[id]/update-logic.ts`'s own shape exactly), `actions.ts` (the
+`"use server"` bindings), `activity-form.tsx`/`note-form.tsx`/
+`delete-entry-form.tsx`/`entry-actions.tsx`/`tag-controls.tsx` (client
+components), `section.tsx` (the Server Component tying it together, all
+`can()` checks), `types.ts`, `related-label.ts`, `timeline-limit.ts`.
+
+**UX**: 100% server-rendered, matching the established MPA architecture
+exactly (no exception found anywhere in 2.1/2.2's own UI) — mutations are
+`useActionState` Server Actions with a full-page `redirect()` on success,
+never a client-side optimistic update; delete uses the exact two-step
+disclosure pattern from `delete-contact-form.tsx` (no Dialog primitive
+exists to reuse); no toast (none exists). Vertical card-list, single
+column at every width (a timeline has no natural narrow-vs-wide
+degradation the way `EntityTable`'s row/card split does). Each entry
+shows a type badge (Call/Email/Meeting/Task/"Logged note" for
+`type='note'` Activities, "Note" for a standalone Note — deliberately
+different labels so the two are never visually confused, per the frozen
+2.3 design's own distinction), subject/body, creator (resolved via the
+existing `listActiveOwnerOptions`/`resolveOwnerLabel` — reused unchanged,
+zero new code needed since `createdBy` is the same kind of id as
+`ownerId`), and timestamp.
+
+**Pagination — bounded `limit`, not a fabricated cursor** (frozen 2.3E
+decision, documented limitation): Activities and Notes are two
+independently-cursored resources with no genuine unified cursor without
+an API/domain change, which is out of scope. Both are fetched with the
+same `limit` (default 10, `?timelineLimit=N` query param, capped at 100);
+"Load more" is a real `<Link>` to the same page with a larger `limit` —
+re-fetches both resources fresh and re-merges, using only the
+already-existing, already-tested `limit` parameter, never a new API
+capability. `hasMore` is true whenever either underlying list's own
+`nextCursor` is non-null OR the combined raw fetch already exceeded the
+display limit, so a genuinely larger dataset is never silently capped
+without a visible way to see more.
+
+**GDPR historical state — empirically confirmed structurally
+unreachable, not merely assumed**: an Activity/Note directly related to
+an erased Contact (`execute_contact_erasure()`, 2.3A: `relatedToId` set
+to `null`) can never again match `loadTimeline`'s own
+`relatedToType`+`relatedToId` exact-match filter — including the filter
+for the record it used to belong to — proven by a test that seeds
+exactly this state and confirms the row is absent from the fetched
+result, not merely tolerated. This is a *good* security property (no
+live page can ever surface a stale/dangling reference to an erased
+contact), not a gap: the row simply becomes invisible to any per-record
+timeline the moment it's erased. The frozen "Erased contact" fallback
+(`related-label.ts`'s `resolveRelatedToLabel`) is implemented and unit
+tested regardless, for defensive correctness and future reuse (e.g. a
+possible future cross-record activity feed), even though no current
+2.3E page has a visible "related to X" label for it to appear in — every
+timeline entry is already implicitly scoped to the page the viewer is
+already on.
+
+**Tags/Taggings** (included in 2.3E per your explicit instruction, wider
+than `docs/07`'s own narrower `ActivityTimeline` definition): chips
+displaying attached Tags with a validated-hex-or-neutral color swatch
+(free-form `tags.color` is never interpolated into a raw CSS string —
+React's `style` object only ever assigns one known property, so there is
+no injection surface either way, but a strict `#rgb`/`#rrggbb` match is
+still required before using the value at all, per the explicit
+instruction to render neutrally when safety isn't guaranteed), an
+"attach existing tag" `<select>` (excluding already-attached tags), and
+a "create & attach new tag" fallback — both gated on `tags:create`.
+Removing a Tagging is a single-click physical delete (no soft-delete —
+the Tag itself is never touched, only the Tagging relation) with no
+2-step confirm (the lowest-stakes, most trivially-reversible action in
+this feature, mirroring the same reasoning already accepted for its
+server-side hard-delete design). **Known, documented limitation**: the
+org's active-tag list (for the "attach existing" picker and for
+resolving an attached Tagging's own name/color) is fetched with
+`limit=MAX_LIMIT` (100, `packages/crm`'s own existing ceiling) — an
+organization with more than 100 active tags could have some attached
+tags fail to resolve a name for this specific join, falling back to a
+truncated, clearly-synthetic label (never a raw full UUID) — a display-
+completeness limitation, not a data-loss or security issue, out of scope
+to fully solve without a dedicated Tag-management/search UI (explicitly
+excluded from 2.3E).
+
+**RBAC**: every visible/mutating control gated server-side via `can()`
+in `section.tsx`, computed once, never client-side — `activities:*`/
+`notes:*`/`tags:*` exactly as frozen in 2.3C, no `taggings:*` (Taggings
+authorize under `tags:*`, reusing the 2.3D API handlers' own enforcement
+unchanged). The UI is never the authorization boundary: every
+`handleX` call still independently re-checks `can()` regardless of what
+this milestone's own code chose to render.
+
+**Tests**: `apps/web/tests/activity-timeline.test.ts` (43 new tests, all
+passing on first run) — per-record scoping (Company/Contact/Deal
+timelines never cross-leak), merged chronology correctness, empty-stream
+and handler-error behavior, the empirical GDPR-unreachability finding
+above, `resolveRelatedToLabel`/`parseTimelineLimit` unit tests,
+Activity/Note create-update-delete logic across org_admin/org_member/
+org_viewer (including a forged HTML/script-looking payload round-tripping
+as inert stored text, never sanitized/mangled server-side — React's
+default escaping is the sole, structural safety net, confirmed by a
+dedicated grep-based test asserting zero `dangerouslySetInnerHTML`/
+`<iframe>` anywhere in the new component files), Tag/Tagging list-attach-
+create-remove logic including the duplicate-Tagging-conflict-maps-to-a-
+safe-message proof, and cross-org IDOR passthrough confirmation. Full
+existing `companies-console.test.ts`/`contacts-console.test.ts`/
+`deals-console.test.ts` regression suites re-run unchanged (119 tests,
+all passing) to confirm the embedded section doesn't break existing
+detail-page behavior.
+
+**Verification**: `pnpm audit --audit-level=high` clean; lint/typecheck
+clean, 8/8 packages (one self-caught, non-security fix: `parseTimelineLimit`
+was originally defined inside `section.tsx`, a `.tsx`/JSX file — Vite's
+import-analysis couldn't parse it when a test imported it directly, so
+it was extracted to its own pure `timeline-limit.ts`, mirroring the
+existing `owner-option.ts`/`owner-options.ts` pure-vs-framework-specific
+split precedent); `pnpm test` all green — database 477/477, auth
+343/343, ui 39/39, compliance 32/32, crm 310/310, web 591/591 (up from
+548, +43), tenancy 28/28; `pnpm build` clean, zero new API routes (UI-only
+milestone, confirmed by an unchanged route inventory); `git diff --check`
+clean; migration-safety gate pass, unchanged at 40 migrations; secret
+scan clean.
+
+**Milestone 2.3E: COMPLETE.**
+
 **Milestone 2.3: IN PROGRESS.** 2.3A (database foundation + GDPR/
-retention wiring), 2.3B (domain layer), 2.3C (RBAC), and 2.3D (API layer)
-are implemented and verified; 2.3E–2.3G (UI, GDPR UI copy,
-tests-across-the-stack closeout) have not started.
+retention wiring), 2.3B (domain layer), 2.3C (RBAC), 2.3D (API layer),
+and 2.3E (Activity Timeline UI) are implemented and verified; 2.3F–2.3G
+(GDPR UI copy polish, tests-across-the-stack closeout) have not started.
 
 ---
 

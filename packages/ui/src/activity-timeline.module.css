@@ -1,0 +1,134 @@
+/*
+ * Milestone 2.3E. Plain CSS Modules — no Tailwind/shadcn (locked
+ * decision, same as entity-table.module.css). Vertical card-list, single
+ * column at every width — a timeline is naturally single-column, so
+ * unlike EntityTable/PipelineBoard there is no separate narrow-viewport
+ * layout to design; the same rules apply from mobile through desktop.
+ * No fixed widths anywhere — text wraps, tags wrap, nothing forces
+ * horizontal scrolling.
+ */
+
+.wrapper {
+  --timeline-border: #e5e7eb;
+  --timeline-muted-text: #6b7280;
+  --timeline-error-text: #b91c1c;
+  --timeline-activity-bg: #eef2ff;
+  --timeline-activity-text: #3730a3;
+  --timeline-note-bg: #f4f5f7;
+  --timeline-note-text: #374151;
+
+  font-family: var(--font-sans, inherit);
+  width: 100%;
+  max-width: 100%;
+}
+
+.createControls {
+  margin-bottom: 1rem;
+}
+
+.statusMessage {
+  padding: 1rem 0;
+  font-size: 0.875rem;
+  color: var(--timeline-muted-text);
+}
+
+.errorMessage {
+  padding: 1rem 0;
+  font-size: 0.875rem;
+  color: var(--timeline-error-text);
+  margin: 0;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.entry {
+  width: 100%;
+}
+
+.entryCard {
+  border: 1px solid var(--timeline-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.entryHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+}
+
+.activityBadge,
+.noteBadge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.activityBadge {
+  background: var(--timeline-activity-bg);
+  color: var(--timeline-activity-text);
+}
+
+.noteBadge {
+  background: var(--timeline-note-bg);
+  color: var(--timeline-note-text);
+}
+
+.timestamp {
+  font-size: 0.75rem;
+  color: var(--timeline-muted-text);
+}
+
+.subject {
+  font-weight: 500;
+  font-size: 0.9375rem;
+  margin: 0.25rem 0;
+  overflow-wrap: break-word;
+}
+
+.body {
+  font-size: 0.875rem;
+  margin: 0.25rem 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.entryFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.creator {
+  font-size: 0.75rem;
+  color: var(--timeline-muted-text);
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.loadMoreLink {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--primary, inherit);
+}

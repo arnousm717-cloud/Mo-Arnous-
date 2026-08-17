@@ -8,6 +8,8 @@ import { listActiveOwnerOptions } from "../../_shared/owner-options";
 import { resolveOwnerLabel } from "../../_shared/owner-option";
 import { ContactEditForm, type EditableContact } from "./contact-edit-form";
 import { DeleteContactForm } from "./delete-contact-form";
+import { ActivityTimelineSection } from "../../_shared/activity-timeline/section";
+import { parseTimelineLimit } from "../../_shared/activity-timeline/timeline-limit";
 import styles from "../../companies/companies.module.css";
 
 interface ContactDetail extends EditableContact {
@@ -33,10 +35,13 @@ interface ContactDetail extends EditableContact {
  */
 export default async function ContactDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ timelineLimit?: string }>;
 }): Promise<React.ReactElement> {
   const { id } = await params;
+  const { timelineLimit: timelineLimitParam } = await searchParams;
   const user = await getAuthenticatedUser();
   const orgContext = user ? await resolveOrganizationContextForUser(user.id) : null;
   const decision = decideContactsConsoleAccess(user?.id ?? null, orgContext);
@@ -120,6 +125,14 @@ export default async function ContactDetailPage({
           <DeleteContactForm contactId={contact.id} />
         </section>
       ) : null}
+
+      <ActivityTimelineSection
+        actor={actor}
+        relatedToType="contact"
+        relatedToId={contact.id}
+        returnPath={`/contacts/${contact.id}`}
+        timelineLimit={parseTimelineLimit(timelineLimitParam)}
+      />
     </main>
   );
 }

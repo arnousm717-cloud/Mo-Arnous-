@@ -128,7 +128,7 @@ Breaks `09-Development-Roadmap.md`'s phases into small, independently-deployable
 
 Full 8-part detail for each of these is written at the start of its phase, once Phase 1 is done and real implementation experience can sharpen the plan rather than guessing at it now.
 
-**Phase 2 — CRM**: 2.1 Companies & Contacts (delivered — `docs/13-Technical-Design-Review.md` "Milestone 2.1") · 2.2 Deals & Pipelines (kanban) (delivered — `docs/13-Technical-Design-Review.md` "Milestone 2.2", closed) · 2.3 Activities/Notes/Tags (in progress — `docs/13-Technical-Design-Review.md` "Milestone 2.3"; 2.3A database foundation + GDPR/retention wiring, 2.3B domain layer, 2.3C RBAC, and 2.3D API layer delivered, 2.3E–2.3G not started) · 2.4 Agency Roll-Up Views · 2.5 Core API Conventions Applied Platform-Wide (pagination, idempotency, error envelope)
+**Phase 2 — CRM**: 2.1 Companies & Contacts (delivered — `docs/13-Technical-Design-Review.md` "Milestone 2.1") · 2.2 Deals & Pipelines (kanban) (delivered — `docs/13-Technical-Design-Review.md` "Milestone 2.2", closed) · 2.3 Activities/Notes/Tags (in progress — `docs/13-Technical-Design-Review.md` "Milestone 2.3"; 2.3A database foundation + GDPR/retention wiring, 2.3B domain layer, 2.3C RBAC, 2.3D API layer, and 2.3E Activity Timeline UI delivered, 2.3F–2.3G not started) · 2.4 Agency Roll-Up Views · 2.5 Core API Conventions Applied Platform-Wide (pagination, idempotency, error envelope)
 
 **Phase 3 — Website Intelligence**: 3.1 Tracking Script + Ingestion Endpoint · 3.2 Visitor Identification · 3.3 Lead Enrichment (first n8n workflow) · 3.4 Rules-Based Lead Scoring · 3.5 Revenue Dashboard v1
 

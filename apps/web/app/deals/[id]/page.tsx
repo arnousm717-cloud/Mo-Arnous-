@@ -13,6 +13,8 @@ import { resolveOwnerLabel } from "../../_shared/owner-option";
 import { dealDisplayLabel } from "../deal-display";
 import { DealEditForm, type EditableDeal } from "./deal-edit-form";
 import { DeleteDealForm } from "./delete-deal-form";
+import { ActivityTimelineSection } from "../../_shared/activity-timeline/section";
+import { parseTimelineLimit } from "../../_shared/activity-timeline/timeline-limit";
 import styles from "../../companies/companies.module.css";
 
 interface DealDetail extends EditableDeal {
@@ -40,10 +42,13 @@ interface DealDetail extends EditableDeal {
  */
 export default async function DealDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ timelineLimit?: string }>;
 }): Promise<React.ReactElement> {
   const { id } = await params;
+  const { timelineLimit: timelineLimitParam } = await searchParams;
   const user = await getAuthenticatedUser();
   const orgContext = user ? await resolveOrganizationContextForUser(user.id) : null;
   const decision = decideDealsConsoleAccess(user?.id ?? null, orgContext);
@@ -171,6 +176,14 @@ export default async function DealDetailPage({
           <DeleteDealForm dealId={deal.id} />
         </section>
       ) : null}
+
+      <ActivityTimelineSection
+        actor={actor}
+        relatedToType="deal"
+        relatedToId={deal.id}
+        returnPath={`/deals/${deal.id}`}
+        timelineLimit={parseTimelineLimit(timelineLimitParam)}
+      />
     </main>
   );
 }

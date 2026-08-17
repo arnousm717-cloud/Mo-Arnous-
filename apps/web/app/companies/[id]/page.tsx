@@ -6,6 +6,8 @@ import { listActiveOwnerOptions } from "../../_shared/owner-options";
 import { resolveOwnerLabel } from "../../_shared/owner-option";
 import { CompanyEditForm, type EditableCompany } from "./company-edit-form";
 import { DeleteCompanyForm } from "./delete-company-form";
+import { ActivityTimelineSection } from "../../_shared/activity-timeline/section";
+import { parseTimelineLimit } from "../../_shared/activity-timeline/timeline-limit";
 import styles from "../companies.module.css";
 
 interface CompanyDetail extends EditableCompany {
@@ -26,10 +28,13 @@ interface CompanyDetail extends EditableCompany {
  */
 export default async function CompanyDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ timelineLimit?: string }>;
 }): Promise<React.ReactElement> {
   const { id } = await params;
+  const { timelineLimit: timelineLimitParam } = await searchParams;
   const user = await getAuthenticatedUser();
   const orgContext = user ? await resolveOrganizationContextForUser(user.id) : null;
   const decision = decideCompaniesConsoleAccess(user?.id ?? null, orgContext);
@@ -82,6 +87,14 @@ export default async function CompanyDetailPage({
           <DeleteCompanyForm companyId={company.id} />
         </section>
       ) : null}
+
+      <ActivityTimelineSection
+        actor={actor}
+        relatedToType="company"
+        relatedToId={company.id}
+        returnPath={`/companies/${company.id}`}
+        timelineLimit={parseTimelineLimit(timelineLimitParam)}
+      />
     </main>
   );
 }
