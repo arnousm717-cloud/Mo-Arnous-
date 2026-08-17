@@ -478,6 +478,30 @@ describe("note-logic: create/update/delete", () => {
     const result = await createNoteForResolvedContext(userId, "deal", dealId, fd({ idempotencyKey: randomUUID(), body: "   " }));
     expect(result.error).toBeDefined();
   });
+
+  it("cross-org: an org A actor cannot update or delete org B's note", async () => {
+    const orgA = await createOrgWithRole("org_admin", "org-a-note-logic");
+    const orgB = await createOrgWithRole("org_admin", "org-b-note-logic");
+    const dealB = await makeDeal(orgB.organizationId);
+    const noteB = await seedNote(orgB.organizationId, "deal", dealB);
+
+    const updated = await updateNoteForResolvedContext(
+      orgA.userId,
+      noteB,
+      fd({ idempotencyKey: randomUUID(), body: "hijacked" }),
+    );
+    expect(updated.error).toBeDefined();
+    expect(updated.error).not.toMatch(/SQLSTATE|duplicate key value violates|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i);
+
+    const deleted = await deleteNoteForResolvedContext(orgA.userId, noteB);
+    expect(deleted.error).toBeDefined();
+    expect(deleted.error).not.toMatch(/SQLSTATE|duplicate key value violates|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i);
+
+    // No cross-org mutation occurred: org B's note is untouched.
+    const stillInDb = await adminPool.query("select body, deleted_at from public.notes where id = $1", [noteB]);
+    expect(stillInDb.rows[0].body).not.toBe("hijacked");
+    expect(stillInDb.rows[0].deleted_at).toBeNull();
+  });
 });
 
 describe("tag-logic: list/attach/create+attach/remove", () => {
@@ -566,6 +590,36 @@ describe("tag-logic: list/attach/create+attach/remove", () => {
 
     const create = await createAndAttachTagForResolvedContext(userId, "deal", dealId, fd({ name: "x" }));
     expect(create.error).toBeDefined();
+  });
+
+  it("cross-org: an org A actor cannot attach org B's tag or remove org B's tagging", async () => {
+    const orgA = await createOrgWithRole("org_admin", "org-a-tag-logic");
+    const orgB = await createOrgWithRole("org_admin", "org-b-tag-logic");
+    const dealA = await makeDeal(orgA.organizationId);
+    const dealB = await makeDeal(orgB.organizationId);
+    const tagB = await seedTag(orgB.organizationId);
+    const taggingB = await seedTagging(orgB.organizationId, tagB, "deal", dealB);
+
+    // Org A actor tries to attach Org B's tag to Org A's own deal.
+    const attached = await attachExistingTagForResolvedContext(orgA.userId, "deal", dealA, fd({ tagId: tagB }));
+    expect(attached.error).toBeDefined();
+    expect(attached.error).not.toMatch(/SQLSTATE|duplicate key value violates|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i);
+
+    // Org A actor tries to remove Org B's tagging outright.
+    const removed = await removeTaggingForResolvedContext(orgA.userId, taggingB);
+    expect(removed.error).toBeDefined();
+    expect(removed.removed).toBeUndefined();
+    expect(removed.error).not.toMatch(/SQLSTATE|duplicate key value violates|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i);
+
+    // No cross-org leak or mutation: org B's tagging is untouched, and org
+    // A's deal never received a Tagging row for org B's tag.
+    const stillInDb = await adminPool.query("select id from public.taggings where id = $1", [taggingB]);
+    expect(stillInDb.rows).toHaveLength(1);
+    const noCrossOrgTagging = await adminPool.query(
+      "select id from public.taggings where organization_id = $1 and tag_id = $2",
+      [orgA.organizationId, tagB],
+    );
+    expect(noCrossOrgTagging.rows).toEqual([]);
   });
 });
 
