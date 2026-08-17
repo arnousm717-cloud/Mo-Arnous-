@@ -58,6 +58,53 @@ export {
   type ListDealsInput,
 } from "./deals";
 export {
+  createActivity,
+  getActivityById,
+  listActivities,
+  updateActivity,
+  softDeleteActivity,
+  type Activity,
+  type CreateActivityInput,
+  type UpdateActivityInput,
+  type ListActivitiesInput,
+} from "./activities";
+export {
+  createNote,
+  getNoteById,
+  listNotes,
+  updateNote,
+  softDeleteNote,
+  type Note,
+  type CreateNoteInput,
+  type UpdateNoteInput,
+  type ListNotesInput,
+} from "./notes";
+export {
+  createTag,
+  getTagById,
+  listTags,
+  updateTag,
+  softDeleteTag,
+  createTagging,
+  listTaggings,
+  deleteTagging,
+  type Tag,
+  type CreateTagInput,
+  type UpdateTagInput,
+  type ListTagsInput,
+  type Tagging,
+  type CreateTaggingInput,
+  type ListTaggingsInput,
+} from "./tags";
+export {
+  type RelatedToType,
+  validateCompanyRelationship,
+  validateContactRelationship,
+  validateDealRelationship,
+  validateRelatedToRelationship,
+  validateTagRelationship,
+} from "./relationship-validation";
+export {
   CrmError,
   ValidationError,
   DuplicateContactEmailError,
@@ -67,5 +114,9 @@ export {
   InvalidPipelineRelationshipError,
   InvalidStageRelationshipError,
   CannotDeleteDefaultPipelineError,
+  InvalidDealRelationshipError,
+  InvalidTagRelationshipError,
+  DuplicateTagNameError,
+  DuplicateTaggingError,
 } from "./errors";
 export { DEFAULT_LIMIT, MAX_LIMIT, type Page, type Cursor } from "./pagination";

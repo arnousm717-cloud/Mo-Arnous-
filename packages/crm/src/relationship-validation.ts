@@ -2,8 +2,10 @@ import type { PoolClient } from "pg";
 import {
   InvalidCompanyRelationshipError,
   InvalidContactRelationshipError,
+  InvalidDealRelationshipError,
   InvalidPipelineRelationshipError,
   InvalidStageRelationshipError,
+  InvalidTagRelationshipError,
 } from "./errors";
 
 /**
@@ -59,6 +61,30 @@ export async function validateContactRelationship(
     throw new InvalidContactRelationshipError(
       "primaryContactId must reference an active contact in this organization",
     );
+  }
+}
+
+/** Milestone 2.3B — completes the company/contact/deal polymorphic target
+ * set for activities.related_to_id/notes.related_to_id/
+ * taggings.taggable_id. Deliberately no null short-circuit: unlike
+ * companyId/primaryContactId (optional business relationships on other
+ * entities), a polymorphic relatedToId/taggableId is never legitimately
+ * null at the point this is called — required-ness is enforced by the
+ * caller (activities.ts/notes.ts/tags.ts) before this function is ever
+ * invoked. */
+export async function validateDealRelationship(
+  client: PoolClient,
+  organizationId: string,
+  dealId: string,
+): Promise<void> {
+  const r = await client.query(
+    `select 1 from public.deals
+     where id = $1 and organization_id = $2 and deleted_at is null
+     limit 1`,
+    [dealId, organizationId],
+  );
+  if (r.rows.length === 0) {
+    throw new InvalidDealRelationshipError("relatedToId/taggableId must reference an active deal in this organization");
   }
 }
 
@@ -124,4 +150,56 @@ export function deriveDealStatus(classification: StageClassification): "open" | 
     return "lost";
   }
   return "open";
+}
+
+/**
+ * Milestone 2.3B. The three allowed polymorphic target types for
+ * activities.related_to_type/notes.related_to_type/
+ * taggings.taggable_type, matching the DB CHECK constraints exactly
+ * (docs/03-Database-Architecture.md §3: Postgres cannot express a
+ * type-conditional foreign key, so this fixed switch IS the tenant-safety
+ * and target-existence guarantee for these columns — the DB proves only
+ * the allowlist and the row's own organization_id).
+ */
+export type RelatedToType = "company" | "contact" | "deal";
+
+/**
+ * Single dispatch point for validating a polymorphic relatedToId/
+ * taggableId against its declared type — a fixed switch over exactly the
+ * three allowed values, never dynamic SQL (no `from ${relatedToType}`
+ * under any circumstances). Reuses the existing per-type validators
+ * unchanged, so "does not exist" / "belongs to another organization" /
+ * "is soft-deleted" stay indistinguishable per type, exactly as those
+ * validators already guarantee individually — this function adds no new
+ * error shape, it only routes to the right one.
+ */
+export async function validateRelatedToRelationship(
+  client: PoolClient,
+  organizationId: string,
+  relatedToType: RelatedToType,
+  relatedToId: string,
+): Promise<void> {
+  switch (relatedToType) {
+    case "company":
+      return validateCompanyRelationship(client, organizationId, relatedToId);
+    case "contact":
+      return validateContactRelationship(client, organizationId, relatedToId);
+    case "deal":
+      return validateDealRelationship(client, organizationId, relatedToId);
+  }
+}
+
+/** Milestone 2.3B — the non-polymorphic half of a Tagging's two-sided
+ * validation (the tag itself, not its target). No null short-circuit:
+ * tag_id is not null on taggings. */
+export async function validateTagRelationship(client: PoolClient, organizationId: string, tagId: string): Promise<void> {
+  const r = await client.query(
+    `select 1 from public.tags
+     where id = $1 and organization_id = $2 and deleted_at is null
+     limit 1`,
+    [tagId, organizationId],
+  );
+  if (r.rows.length === 0) {
+    throw new InvalidTagRelationshipError("tagId must reference an active tag in this organization");
+  }
 }

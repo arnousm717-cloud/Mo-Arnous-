@@ -103,3 +103,47 @@ export class CannotDeleteDefaultPipelineError extends CrmError {
     this.name = "CannotDeleteDefaultPipelineError";
   }
 }
+
+/** dealId does not resolve to an active deal in the caller's own
+ * organization (Milestone 2.3B). Same indistinguishability rule as
+ * InvalidCompanyRelationshipError/InvalidContactRelationshipError —
+ * completes the three-way `relatedToType`/`taggableType` polymorphic
+ * target set (company/contact/deal). */
+export class InvalidDealRelationshipError extends CrmError {
+  constructor(message: string) {
+    super(message, "invalid_deal_relationship");
+    this.name = "InvalidDealRelationshipError";
+  }
+}
+
+/** tagId does not resolve to an active tag in the caller's own
+ * organization (Milestone 2.3B) — the non-polymorphic half of a Tagging's
+ * two-sided validation. Same indistinguishability rule as every other
+ * InvalidXRelationshipError. */
+export class InvalidTagRelationshipError extends CrmError {
+  constructor(message: string) {
+    super(message, "invalid_tag_relationship");
+    this.name = "InvalidTagRelationshipError";
+  }
+}
+
+/** A tag create/update collided with tags_org_active_name_idx (case-
+ * insensitive, organization-scoped, active tags only) — mirrors
+ * DuplicateContactEmailError's role for the analogous contacts_org_
+ * active_email_idx conflict (Milestone 2.3B). */
+export class DuplicateTagNameError extends CrmError {
+  constructor(message: string) {
+    super(message, "duplicate_tag_name");
+    this.name = "DuplicateTagNameError";
+  }
+}
+
+/** A tagging create collided with taggings_tag_id_taggable_type_
+ * taggable_id_key — the same (tag, target) pair already exists
+ * (Milestone 2.3B). */
+export class DuplicateTaggingError extends CrmError {
+  constructor(message: string) {
+    super(message, "duplicate_tagging");
+    this.name = "DuplicateTaggingError";
+  }
+}
