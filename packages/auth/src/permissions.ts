@@ -51,7 +51,19 @@ export type PermissionKey =
   | "pipelines:read"
   | "pipelines:create"
   | "pipelines:update"
-  | "pipelines:delete";
+  | "pipelines:delete"
+  | "activities:read"
+  | "activities:create"
+  | "activities:update"
+  | "activities:delete"
+  | "notes:read"
+  | "notes:create"
+  | "notes:update"
+  | "notes:delete"
+  | "tags:read"
+  | "tags:create"
+  | "tags:update"
+  | "tags:delete";
 
 export interface Actor {
   userId: string;
@@ -136,6 +148,26 @@ type PermissionGrants = Partial<Record<PermissionKey, true>>;
  * an agency-scoped Actor carries agencyId, not organizationId). Agency
  * roll-up access to Deals/Pipelines remains explicitly out of scope for
  * this milestone (docs/13 Milestone 2.2C).
+ *
+ * activities:*, notes:*, tags:* (Milestone 2.3C, docs/13 "Milestone 2.3"
+ * frozen decision): org_admin gets all 12; org_member gets read/create/
+ * update on all three but no delete (mirrors companies:* and contacts:*'s
+ * own no-delete-for-org_member pattern exactly); org_viewer gets read only.
+ * agency_owner/agency_admin/portal_customer get NONE of these 12 keys —
+ * same structural reason as every other CRM resource so far (no
+ * agency_rollup_activities/agency_rollup_notes/agency_rollup_tags view
+ * exists, and an agency-scoped Actor carries agencyId, not
+ * organizationId).
+ *
+ * taggings has NO permission keys of its own — deliberately no
+ * taggings:* set exists, mirroring pipeline_stages' own precedent exactly
+ * (a relationship/child row authorizes under its owning resource's keys,
+ * never its own family). A future Taggings API route (2.3D) authorizes
+ * under tags:* instead: list/get a tagging => tags:read; create a
+ * tagging => tags:create; delete a tagging => tags:delete. There is no
+ * "update a tagging" case — Taggings have no update operation at any
+ * layer (2.3A schema, 2.3B domain layer) — so tags:update is never
+ * consulted for a tagging route.
  */
 export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
   agency_owner: {
@@ -181,6 +213,18 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "pipelines:create": true,
     "pipelines:update": true,
     "pipelines:delete": true,
+    "activities:read": true,
+    "activities:create": true,
+    "activities:update": true,
+    "activities:delete": true,
+    "notes:read": true,
+    "notes:create": true,
+    "notes:update": true,
+    "notes:delete": true,
+    "tags:read": true,
+    "tags:create": true,
+    "tags:update": true,
+    "tags:delete": true,
   },
   org_member: {
     "organizations:read": true,
@@ -194,6 +238,15 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "deals:create": true,
     "deals:update": true,
     "pipelines:read": true,
+    "activities:read": true,
+    "activities:create": true,
+    "activities:update": true,
+    "notes:read": true,
+    "notes:create": true,
+    "notes:update": true,
+    "tags:read": true,
+    "tags:create": true,
+    "tags:update": true,
   },
   org_viewer: {
     "organizations:read": true,
@@ -201,6 +254,9 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "contacts:read": true,
     "deals:read": true,
     "pipelines:read": true,
+    "activities:read": true,
+    "notes:read": true,
+    "tags:read": true,
   },
   portal_customer: {},
 };

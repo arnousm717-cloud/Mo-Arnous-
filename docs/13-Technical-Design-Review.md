@@ -2888,10 +2888,170 @@ belongs to the caller's organization — that is 2.3B's responsibility;
 this migration proves only the allowed-type CHECK and the row's own
 `organization_id`.
 
+### Milestone 2.3B — Activities, Notes & Tags domain layer
+
+`packages/crm` domain logic only — no RBAC keys, no API routes, no UI,
+no migration, no change to 2.3A's schema or GDPR erasure logic.
+
+**New modules**: `activities.ts`, `notes.ts` (both full CRUD:
+create/getById/list/update/softDelete, following the established
+companies.ts/contacts.ts/deals.ts conventions exactly — `runInClientOrTransaction`/`withTenantContext`,
+`toX(row)` mappers, `has()`-guarded partial updates, `null` return for
+not-found, cursor pagination via the shared `pagination.ts`); `tags.ts`
+(Tags full CRUD plus Taggings create/list/delete — Taggings live inside
+`tags.ts` rather than a separate file, since a Tagging has no
+independent lifecycle apart from a Tag being attached/detached, matching
+the frozen 2.3 design's framing).
+
+**relatedToId/taggableId is required at ordinary create-time despite DB
+nullability** (2.3A's schema allows NULL solely for GDPR erasure) —
+enforced here at the domain layer for Activities, Notes, and Taggings'
+target side; `notes.body` is required and non-whitespace for the
+identical reason. `relatedToType`/`relatedToId` are structurally absent
+from `UpdateActivityInput`/`UpdateNoteInput` — not reassignable in
+Milestone 2.3 (frozen design), so no revalidation-of-historical-
+relationship code path exists at all for updates. `createdBy` on
+Activities/Notes is sourced exclusively from `ctx.userId` (trusted
+request context, matching `packages/compliance`'s own `actor_user_id`
+convention) — never from caller input.
+
+**Polymorphic validation** (`relationship-validation.ts`): added
+`validateDealRelationship` (completing the company/contact/deal set) and
+a single dispatcher `validateRelatedToRelationship` using a fixed
+`switch` over exactly `company | contact | deal` — no dynamic SQL,
+reused unchanged by Activities, Notes, and Taggings' target-side
+validation. Added `validateTagRelationship` for Taggings' tag-side
+validation. Taggings validate BOTH sides before insert (the tag itself
+and the polymorphic target), each collapsing "doesn't exist / wrong org
+/ soft-deleted" into one indistinguishable error, matching every
+existing `InvalidXRelationshipError`'s own discipline — no cross-tenant
+existence leak.
+
+**GDPR historical-state reads**: `getActivityById`/`getNoteById`/
+`listActivities`/`listNotes` exclude only soft-deleted rows — a row
+produced by `execute_contact_erasure()` (`related_to_id`/free-text
+columns NULL, `related_to_type` still `'contact'`) is read back exactly
+as stored, never rejected, never repaired, never given a fabricated
+identifier. Proved by tests that directly reproduce that exact row shape
+via `seedAsAdmin`, never through the domain layer (which cannot produce
+it itself).
+
+**Tests**: `activities.test.ts` (43), `notes.test.ts` (36), `tags.test.ts`
+(36, including Taggings) — 115 new tests, all passing on first run.
+Cover: field/type/allowlist validation, mass-assignment guards
+(`organizationId`/`createdBy` always from `ctx`, never `input`), all 9
+required cross-org rejection cases (Activity/Note/Tagging ×
+Company/Contact/Deal), cross-org Tag attachment, soft-deleted-target
+rejection, duplicate Tag name and duplicate Tagging conflict mapping,
+the GDPR-erased historical-state read proof, and the
+soft-deleted-target-does-not-revalidate-an-unrelated-update proof.
+
+**A self-caught, test-only defect fixed before commit**: 6 new test
+cases used a `...({...} as never)` spread pattern TypeScript rejects
+(`TS2698`, "spread types may only be created from object types") — fixed
+by casting the whole object literal instead of the spread fragment; no
+behavioral change.
+
+**Verification**: `pnpm test` all green — database 476/476, auth
+257/257, ui 39/39, compliance 32/32, crm 310/310 (was 195, +115), web
+440/440, tenancy 28/28; lint/typecheck/build clean; `git diff --check`
+clean; migration-safety gate unchanged at 39 (confirms no migration
+added); secret scan clean.
+
+**Milestone 2.3B: COMPLETE.**
+
+### Milestone 2.3C — Activities, Notes & Tags RBAC
+
+Permission-matrix data only — no domain-logic change (`packages/crm`
+untouched this step), no API routes, no UI. **2.3D has not started.**
+
+**12 new `PermissionKey`s added** to `packages/auth/src/permissions.ts`:
+`activities:read`, `activities:create`, `activities:update`,
+`activities:delete`, `notes:read`, `notes:create`, `notes:update`,
+`notes:delete`, `tags:read`, `tags:create`, `tags:update`,
+`tags:delete`. No wildcard/catch-all key. No `taggings:*` key set —
+Taggings authorize under their owning Tag's own keys instead (below),
+mirroring `pipeline_stages`' own precedent exactly (a relationship/child
+resource authorizes under its owning resource's keys, never its own
+family).
+
+**Frozen matrix applied exactly**:
+
+| Role | activities:read | activities:create | activities:update | activities:delete | notes:read | notes:create | notes:update | notes:delete | tags:read | tags:create | tags:update | tags:delete |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| org_admin | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| org_member | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| org_viewer | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| agency_owner | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| agency_admin | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| portal_customer | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+No agency roll-up access granted (explicitly out of this milestone's
+scope, same as every other resource added so far — no
+`agency_rollup_activities`/`agency_rollup_notes`/`agency_rollup_tags`
+view exists).
+
+**Taggings authorization mapping (design intent for 2.3D, not yet wired
+to any route)**: Taggings have no permission keys of their own. A future
+Taggings API route authorizes under its owning Tag's own keys: `GET`
+taggings → `tags:read`; `POST` a tagging → `tags:create`; `DELETE` a
+tagging → `tags:delete`. There is no `PATCH` mapping — Taggings have no
+update operation at any layer (2.3A schema, 2.3B domain layer), so
+`tags:update` is never consulted for a tagging route. Documented in
+`packages/auth/src/permissions.ts`'s own comment.
+
+**Migration**: one additive file,
+`20260817090300_update_role_permission_sets_2_3c.sql` — a
+`roles.permission_set` data update only (no schema/RLS/function
+change), following the exact established pattern (full, deterministic
+per-role JSONB replacement, never a merge) from the M1.5 seed, M1.6,
+2.1E, and 2.2C permission-set migrations. Only `org_admin`/
+`org_member`/`org_viewer` rows are touched; `agency_owner`/
+`agency_admin`/`portal_customer` rows are left untouched (they gain none
+of the 12 keys) and remain byte-identical to their previously-committed
+state.
+
+**`roles.permission_set` behavior**: verified byte-equivalent to
+`PERMISSION_MATRIX` via `permission-set-sync.test.ts` run against the
+real local database after the migration was applied (`db reset`,
+replaying all 40 migrations from the corrected source) — `toEqual()`
+deep-equality on every role's `permission_set`, plus a row-count/role-set
+check. Same regression guard established at M1.5 and reused unchanged at
+every subsequent permission-set update (M1.6, 2.1E, 2.2C, now 2.3C) —
+passed on first run.
+
+**Tests**: `packages/auth/tests/permissions.test.ts`'s independently
+hand-written `EXPECTED` matrix (never derived from `PERMISSION_MATRIX`)
+extended with all 12 new keys for all 6 roles, plus dedicated Milestone
+2.3C describe blocks proving: the full frozen Activities/Notes/Tags
+matrix per role; Taggings authorization maps to `tags:*` (structural
+check that no `taggings:*` key exists anywhere in the matrix or in this
+test file's own independently maintained key list, plus a
+documented-intent test for the three HTTP-verb mappings, explicitly
+noting there is no PATCH); `activities:delete`/`notes:delete`/
+`tags:delete` never diverge from each other or from
+`data-subject-requests:execute` by accident (no role in the frozen
+matrix holds one delete without the other two, proving `can()` has no
+cross-key inference); every pre-2.3C permission (all 22 M1.5/M1.6/2.1E
+keys plus the 8 2.2C Deals/Pipelines keys) unchanged for every role; an
+unrecognized action string and an unrecognized role both deny without
+throwing. The pre-existing `readOnlyGrants` list in the "deny-by-default"
+test was updated to include `activities:read`/`notes:read`/`tags:read`.
+
+**Verification**: `pnpm test` all green — database 477/477 (up from
+476; the +1 is `migration-safety.test.ts`'s own dynamic per-migration-
+file test count, not a new hand-written test), auth 343/343 (up from
+257), ui 39/39, compliance 32/32, crm 310/310, web 440/440, tenancy
+28/28; `pnpm audit --audit-level=high` clean; lint/typecheck/build
+clean; `git diff --check` clean; migration-safety gate pass at 40
+migrations; secret scan clean.
+
+**Milestone 2.3C: COMPLETE.**
+
 **Milestone 2.3: IN PROGRESS.** 2.3A (database foundation + GDPR/
-retention wiring) is implemented and verified; 2.3B–2.3G (domain layer,
-RBAC, API, UI, GDPR UI copy, tests-across-the-stack closeout) have not
-started.
+retention wiring), 2.3B (domain layer), and 2.3C (RBAC) are implemented
+and verified; 2.3D–2.3G (API, UI, GDPR UI copy, tests-across-the-stack
+closeout) have not started.
 
 ---
 

@@ -35,6 +35,18 @@ const PERMISSIONS: PermissionKey[] = [
   "pipelines:create",
   "pipelines:update",
   "pipelines:delete",
+  "activities:read",
+  "activities:create",
+  "activities:update",
+  "activities:delete",
+  "notes:read",
+  "notes:create",
+  "notes:update",
+  "notes:delete",
+  "tags:read",
+  "tags:create",
+  "tags:update",
+  "tags:delete",
 ];
 
 /**
@@ -88,6 +100,22 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "pipelines:create": false,
     "pipelines:update": false,
     "pipelines:delete": false,
+    // Milestone 2.3C: agency roles get zero direct Activities/Notes/Tags
+    // access — same structural reason as companies:*/contacts:*/
+    // deals:*/pipelines:* above (no agency_rollup_activities/
+    // agency_rollup_notes/agency_rollup_tags view exists yet).
+    "activities:read": false,
+    "activities:create": false,
+    "activities:update": false,
+    "activities:delete": false,
+    "notes:read": false,
+    "notes:create": false,
+    "notes:update": false,
+    "notes:delete": false,
+    "tags:read": false,
+    "tags:create": false,
+    "tags:update": false,
+    "tags:delete": false,
   },
   agency_admin: {
     "organizations:read": false,
@@ -120,6 +148,18 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "pipelines:create": false,
     "pipelines:update": false,
     "pipelines:delete": false,
+    "activities:read": false,
+    "activities:create": false,
+    "activities:update": false,
+    "activities:delete": false,
+    "notes:read": false,
+    "notes:create": false,
+    "notes:update": false,
+    "notes:delete": false,
+    "tags:read": false,
+    "tags:create": false,
+    "tags:update": false,
+    "tags:delete": false,
   },
   org_admin: {
     "organizations:read": true,
@@ -155,6 +195,19 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "pipelines:create": true,
     "pipelines:update": true,
     "pipelines:delete": true,
+    // Milestone 2.3C: org_admin gets all 12 Activities/Notes/Tags keys.
+    "activities:read": true,
+    "activities:create": true,
+    "activities:update": true,
+    "activities:delete": true,
+    "notes:read": true,
+    "notes:create": true,
+    "notes:update": true,
+    "notes:delete": true,
+    "tags:read": true,
+    "tags:create": true,
+    "tags:update": true,
+    "tags:delete": true,
   },
   org_member: {
     "organizations:read": true,
@@ -191,6 +244,21 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "pipelines:create": false,
     "pipelines:update": false,
     "pipelines:delete": false,
+    // Milestone 2.3C: read/create/update on all three, no delete —
+    // mirrors companies:*/contacts:*'s own no-delete-for-org_member
+    // pattern exactly.
+    "activities:read": true,
+    "activities:create": true,
+    "activities:update": true,
+    "activities:delete": false,
+    "notes:read": true,
+    "notes:create": true,
+    "notes:update": true,
+    "notes:delete": false,
+    "tags:read": true,
+    "tags:create": true,
+    "tags:update": true,
+    "tags:delete": false,
   },
   org_viewer: {
     "organizations:read": true,
@@ -225,6 +293,19 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "pipelines:create": false,
     "pipelines:update": false,
     "pipelines:delete": false,
+    // Milestone 2.3C: read-only, no write of any kind.
+    "activities:read": true,
+    "activities:create": false,
+    "activities:update": false,
+    "activities:delete": false,
+    "notes:read": true,
+    "notes:create": false,
+    "notes:update": false,
+    "notes:delete": false,
+    "tags:read": true,
+    "tags:create": false,
+    "tags:update": false,
+    "tags:delete": false,
   },
   portal_customer: {
     "organizations:read": false,
@@ -257,6 +338,18 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "pipelines:create": false,
     "pipelines:update": false,
     "pipelines:delete": false,
+    "activities:read": false,
+    "activities:create": false,
+    "activities:update": false,
+    "activities:delete": false,
+    "notes:read": false,
+    "notes:create": false,
+    "notes:update": false,
+    "notes:delete": false,
+    "tags:read": false,
+    "tags:create": false,
+    "tags:update": false,
+    "tags:delete": false,
   },
 };
 
@@ -357,6 +450,9 @@ describe("can(): deny-by-default", () => {
       "contacts:read",
       "deals:read",
       "pipelines:read",
+      "activities:read",
+      "notes:read",
+      "tags:read",
     ];
     for (const permission of PERMISSIONS) {
       if (readOnlyGrants.includes(permission)) continue;
@@ -625,6 +721,46 @@ describe("can(): Milestone 2.1E — pre-existing 14 permissions unaffected", () 
       }
     }
   });
+
+  it("every pre-2.3C permission (including the eight 2.2C Deals/Pipelines keys) is unchanged for every role", () => {
+    const preExisting2_3C: PermissionKey[] = [
+      "organizations:read",
+      "organizations:list-clients",
+      "organizations:create-client",
+      "organizations:manage-billing",
+      "organizations:manage-users",
+      "organizations:manage-settings",
+      "agencies:read",
+      "agencies:manage-branding",
+      "agencies:manage-billing",
+      "agencies:manage-domains",
+      "consent:record",
+      "data-subject-requests:create",
+      "data-subject-requests:read",
+      "data-subject-requests:execute",
+      "companies:read",
+      "companies:create",
+      "companies:update",
+      "companies:delete",
+      "contacts:read",
+      "contacts:create",
+      "contacts:update",
+      "contacts:delete",
+      "deals:read",
+      "deals:create",
+      "deals:update",
+      "deals:delete",
+      "pipelines:read",
+      "pipelines:create",
+      "pipelines:update",
+      "pipelines:delete",
+    ];
+    for (const role of ROLES) {
+      for (const permission of preExisting2_3C) {
+        expect(can(actorFor(role), permission)).toBe(EXPECTED[role][permission]);
+      }
+    }
+  });
 });
 
 describe("can(): Milestone 2.2C — Deals/Pipelines permissions", () => {
@@ -755,6 +891,182 @@ describe("can(): Milestone 2.2C — unknown role/action remains fail-closed, can
   it("an unrecognized role denies every deals/pipelines permission, never throws", () => {
     const actor = actorFor("not_a_real_role");
     for (const permission of ["deals:read", "deals:create", "deals:update", "deals:delete", "pipelines:read", "pipelines:create", "pipelines:update", "pipelines:delete"] as const) {
+      expect(() => can(actor, permission)).not.toThrow();
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+});
+
+describe("can(): Milestone 2.3C — Activities/Notes/Tags permissions", () => {
+  const ACTIVITIES_KEYS = ["activities:read", "activities:create", "activities:update", "activities:delete"] as const;
+  const NOTES_KEYS = ["notes:read", "notes:create", "notes:update", "notes:delete"] as const;
+  const TAGS_KEYS = ["tags:read", "tags:create", "tags:update", "tags:delete"] as const;
+
+  it("org_admin is granted all 4 activities keys, all 4 notes keys, and all 4 tags keys", () => {
+    const actor = actorFor("org_admin");
+    for (const permission of [...ACTIVITIES_KEYS, ...NOTES_KEYS, ...TAGS_KEYS]) {
+      expect(can(actor, permission)).toBe(true);
+    }
+  });
+
+  it("org_member: read/create/update for activities/notes/tags, no delete for any of the three", () => {
+    const actor = actorFor("org_member");
+    expect(can(actor, "activities:read")).toBe(true);
+    expect(can(actor, "activities:create")).toBe(true);
+    expect(can(actor, "activities:update")).toBe(true);
+    expect(can(actor, "activities:delete")).toBe(false);
+    expect(can(actor, "notes:read")).toBe(true);
+    expect(can(actor, "notes:create")).toBe(true);
+    expect(can(actor, "notes:update")).toBe(true);
+    expect(can(actor, "notes:delete")).toBe(false);
+    expect(can(actor, "tags:read")).toBe(true);
+    expect(can(actor, "tags:create")).toBe(true);
+    expect(can(actor, "tags:update")).toBe(true);
+    expect(can(actor, "tags:delete")).toBe(false);
+  });
+
+  it("org_viewer: read only for activities, notes, and tags — no create/update/delete of any of them", () => {
+    const actor = actorFor("org_viewer");
+    expect(can(actor, "activities:read")).toBe(true);
+    expect(can(actor, "notes:read")).toBe(true);
+    expect(can(actor, "tags:read")).toBe(true);
+    for (const permission of [
+      "activities:create",
+      "activities:update",
+      "activities:delete",
+      "notes:create",
+      "notes:update",
+      "notes:delete",
+      "tags:create",
+      "tags:update",
+      "tags:delete",
+    ] as const) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("agency_owner and agency_admin cannot read/create/update/delete any of activities/notes/tags", () => {
+    for (const role of ["agency_owner", "agency_admin"] as const) {
+      const actor = actorFor(role);
+      for (const permission of [...ACTIVITIES_KEYS, ...NOTES_KEYS, ...TAGS_KEYS]) {
+        expect(can(actor, permission)).toBe(false);
+      }
+    }
+  });
+
+  it("portal_customer cannot read/create/update/delete any of activities/notes/tags", () => {
+    const actor = actorFor("portal_customer");
+    for (const permission of [...ACTIVITIES_KEYS, ...NOTES_KEYS, ...TAGS_KEYS]) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("no role is granted agency roll-up access to activities/notes/tags via these keys — every grant is scope-checked against the actor's own organizationId", () => {
+    const actor = actorFor("org_admin");
+    const someoneElsesOrgId = randomUUID();
+    expect(can(actor, "activities:delete", { organizationId: someoneElsesOrgId })).toBe(false);
+    expect(can(actor, "activities:delete", { organizationId: actor.organizationId })).toBe(true);
+    expect(can(actor, "notes:delete", { organizationId: someoneElsesOrgId })).toBe(false);
+    expect(can(actor, "notes:delete", { organizationId: actor.organizationId })).toBe(true);
+    expect(can(actor, "tags:delete", { organizationId: someoneElsesOrgId })).toBe(false);
+    expect(can(actor, "tags:delete", { organizationId: actor.organizationId })).toBe(true);
+  });
+});
+
+describe("can(): Milestone 2.3C — taggings authorization maps to tags:* (no taggings:* keys exist)", () => {
+  it("no role's grants contain a taggings:* key — a structural check, not a re-derivation of expected VALUES (which stay independently hand-written above)", () => {
+    for (const role of ROLES) {
+      const grantedKeys = Object.keys(PERMISSION_MATRIX[role]);
+      expect(grantedKeys.some((key) => key.startsWith("taggings:"))).toBe(false);
+    }
+  });
+
+  it("no taggings:* key exists anywhere in the PermissionKey union's runtime values either — PERMISSIONS (this file's own independently maintained key list) contains none", () => {
+    expect(PERMISSIONS.some((key) => key.startsWith("taggings:"))).toBe(false);
+  });
+
+  it("design intent for 2.3D: a Taggings API route checks the SAME key its owning-resource HTTP verb would use — GET/POST/DELETE Taggings => tags:read/tags:create/tags:delete (there is no PATCH — Taggings have no update operation at any layer)", () => {
+    // Not a route test (no API route exists yet, 2.3D) — this proves the
+    // three keys a future Taggings-route implementation must reuse
+    // already exist and are granted per the same frozen matrix tags
+    // themselves use, so 2.3D has nothing further to add to this matrix.
+    const admin = actorFor("org_admin");
+    const member = actorFor("org_member");
+    const viewer = actorFor("org_viewer");
+    expect(can(admin, "tags:read")).toBe(true); // GET taggings
+    expect(can(admin, "tags:create")).toBe(true); // POST tagging
+    expect(can(admin, "tags:delete")).toBe(true); // DELETE tagging
+    expect(can(member, "tags:read")).toBe(true); // GET taggings
+    expect(can(member, "tags:create")).toBe(true); // POST tagging
+    expect(can(member, "tags:delete")).toBe(false); // DELETE tagging denied
+    expect(can(viewer, "tags:read")).toBe(true); // GET taggings
+    expect(can(viewer, "tags:create")).toBe(false); // POST tagging denied
+  });
+});
+
+describe("can(): Milestone 2.3C — activities:delete/notes:delete/tags:delete are independent of each other and of DSR", () => {
+  it("activities:delete does not imply any DSR/compliance permission", () => {
+    const actor = actorFor("org_member");
+    // org_member never gets activities:delete at all — confirms the key
+    // is not coupled to any DSR permission by proving the role that lacks
+    // it (org_member) gains nothing from anything DSR-related either, and
+    // org_admin (which DOES hold activities:delete) is checked separately
+    // below for independence.
+    expect(can(actor, "activities:delete")).toBe(false);
+
+    const admin = actorFor("org_admin");
+    expect(can(admin, "activities:delete")).toBe(true);
+    expect(can(admin, "data-subject-requests:execute")).toBe(true);
+    // Both true for org_admin, but as two SEPARATELY granted keys — proven
+    // by org_viewer holding data-subject-requests:execute=false while
+    // genuinely lacking activities:delete for an unrelated reason
+    // (read-only, not merely non-admin), never because one key derives
+    // the other.
+    const viewer = actorFor("org_viewer");
+    expect(can(viewer, "activities:delete")).toBe(false);
+    expect(can(viewer, "data-subject-requests:execute")).toBe(false);
+  });
+
+  it("notes:delete and tags:delete never diverge from activities:delete by accident — no role in the frozen matrix holds one without the others", () => {
+    // No role holds exactly one of the three deletes without the other
+    // two (org_admin holds all three, everyone else holds none) — this is
+    // what proves the frozen matrix itself never uses one key as a proxy
+    // for another; can() has no cross-key inference at all.
+    for (const role of ROLES) {
+      const actor = actorFor(role);
+      const hasActivitiesDelete = can(actor, "activities:delete");
+      const hasNotesDelete = can(actor, "notes:delete");
+      const hasTagsDelete = can(actor, "tags:delete");
+      expect(hasActivitiesDelete).toBe(hasNotesDelete);
+      expect(hasNotesDelete).toBe(hasTagsDelete);
+    }
+  });
+});
+
+describe("can(): Milestone 2.3C — unknown role/action remains fail-closed, can() never throws", () => {
+  it("an unrecognized action string (not a member of PermissionKey at all) denies at runtime rather than throwing", () => {
+    const actor = actorFor("org_admin");
+    const bogusAction = "activities:archive" as unknown as PermissionKey;
+    expect(() => can(actor, bogusAction)).not.toThrow();
+    expect(can(actor, bogusAction)).toBe(false);
+  });
+
+  it("an unrecognized role denies every activities/notes/tags permission, never throws", () => {
+    const actor = actorFor("not_a_real_role");
+    for (const permission of [
+      "activities:read",
+      "activities:create",
+      "activities:update",
+      "activities:delete",
+      "notes:read",
+      "notes:create",
+      "notes:update",
+      "notes:delete",
+      "tags:read",
+      "tags:create",
+      "tags:update",
+      "tags:delete",
+    ] as const) {
       expect(() => can(actor, permission)).not.toThrow();
       expect(can(actor, permission)).toBe(false);
     }
