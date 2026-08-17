@@ -665,11 +665,12 @@ describe("resolveContactDisplayName() / resolvePipelineDisplayName() / resolveSt
     expect(deletedLabel).not.toBe(deletedId);
   });
 
-  it("resolveContactDisplayName falls back to a generic safe label for a genuinely unresolvable id", async () => {
+  it("resolveContactDisplayName falls back to 'Erased contact' for a physically absent id (Milestone 2.3F: only reachable via GDPR contact erasure, never ordinary soft-delete)", async () => {
     const admin = await createOrgWithRole("org_admin", "display-contact-unresolvable-admin");
     const options = await listActiveContactOptions(admin);
     const label = await resolveContactDisplayName(admin, randomUUID(), options);
-    expect(label).toBe("Deleted contact");
+    expect(label).toBe("Erased contact");
+    expect(label).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
   });
 
   it("resolvePipelineDisplayName returns '<name> (deleted)' for a soft-deleted pipeline, never the raw id", async () => {

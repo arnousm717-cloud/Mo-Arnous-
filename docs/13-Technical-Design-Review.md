@@ -3323,10 +3323,121 @@ scan clean.
 
 **Milestone 2.3E: COMPLETE.**
 
+### Milestone 2.3F — GDPR-erasure vocabulary correction (CRM UI)
+
+**Scope**: presentation-only. A read-only audit (this milestone's own
+Phase 1) found that no document in this repository independently defines
+"Milestone 2.3F" — the "GDPR UI copy polish" framing existed only as this
+session's own forward-reference, written into this file and docs/12
+during 2.3E. 2.3F's actual scope was therefore derived from the audit's
+own evidence, not asserted from that label, and narrowed to exactly two
+findings once traced to their root cause.
+
+**Canonical vocabulary distinction (frozen this milestone)**:
+
+- `"<name> (deleted)"` — an ordinary soft-deleted CRM record, still
+  physically present, resolvable via the record's own `*IncludingDeleted`
+  read helper. Recoverable in principle. Unchanged.
+- `"Unknown member"` — a non-null `ownerId`/`createdBy` whose membership
+  has become `'removed'`. Not GDPR-related; a separate, pre-existing
+  design decision (`_shared/owner-option.ts`).
+- `"Erased contact"` — a Contact reference that is physically absent
+  (`getContactByIdIncludingDeleted` returns null), which for `contacts`
+  can only occur via `execute_contact_erasure()` (GDPR hard-delete);
+  ordinary soft-delete always leaves the row queryable here. Changed this
+  milestone from the prior, misleadingly-recoverable-sounding
+  `"Deleted contact"` (`_shared/contact-display.ts`).
+- `"Erased user"` — a Timeline Activity/Note's creator label when
+  `createdBy` is null. `resolveOwnerLabel`'s own `if (!ownerId) return
+  null` guard means this is the *only* reason the resolved label is ever
+  null (an inactive-but-identified member resolves to `"Unknown member"`
+  instead) — and `created_by` on an existing row only ever becomes null
+  via `execute_user_erasure()`'s `ON DELETE SET NULL` cascade, never any
+  other code path. New this milestone (`_shared/activity-timeline/
+  creator-label.ts`), replacing the generic `"Unknown"` fallback
+  previously shown by `packages/ui/src/activity-timeline.tsx` for this
+  specific case. `packages/ui`'s own defensive `?? "Unknown"` fallback is
+  deliberately left in place as a last-resort default for any future
+  caller that doesn't apply `resolveCreatorLabel` — the GDPR-aware
+  resolution happens in the web integration layer
+  (`_shared/activity-timeline/section.tsx`), never in the presentation
+  package, preserving 2.3E's presentation-only boundary for
+  `packages/ui`.
+
+**Reachability, re-confirmed empirically**: a directly-related Activity/
+Note whose `related_to_id` was nulled by `execute_contact_erasure()`
+(2.3A) remains structurally unreachable through any live per-record
+timeline fetch — re-confirmed by this milestone's audit, not just
+carried over from 2.3E's finding. By contrast, `created_by` going null
+via `execute_user_erasure()` does *not* touch `related_to_id`, so that
+row stays fully visible on its record's own timeline — this is the
+reachable case Finding A (the "Erased user" label) actually addresses.
+A new test proves this distinction directly: an Activity with
+`created_by` nulled (simulating the erasure cascade) is found by
+`loadTimeline`, while the existing `related_to_id`-nulled case remains
+absent.
+
+**Files changed**: `apps/web/app/_shared/activity-timeline/creator-label.ts`
+(new, pure resolver, mirrors `related-label.ts`'s exact style — no DB
+access, no actor resolution, no tenant logic, no RBAC); `section.tsx`
+(applies `resolveCreatorLabel` when mapping each Activity/Note entry,
+before entries reach `packages/ui`); `_shared/contact-display.ts`
+(`"Deleted contact"` → `"Erased contact"` for the physically-absent
+branch only — the soft-deleted-but-present `"<name> (deleted)"` branch is
+untouched). No migration, no domain/API/RBAC change — `createdBy: null`
+was already returned by the existing 2.3D API; this milestone only
+changes how it is labeled.
+
+**Tests**: extended `activity-timeline.test.ts` (+5 net: `resolveCreatorLabel`
+unit tests for the null and non-null cases; an integration-style test
+seeding an Activity, nulling its `created_by` via direct SQL to simulate
+the erasure cascade, and confirming the `loadTimeline` → `resolveCreatorLabel`
+composition — the exact composition `section.tsx` performs — yields
+`"Erased user"`; a companion test confirming a normal, non-erased
+creator's label passes through unchanged) and `deals-console.test.ts`
+(updated the existing physically-absent-contact test's expectation from
+`"Deleted contact"` to `"Erased contact"`, with an added no-raw-UUID
+assertion). No test was weakened to make this pass. Full existing
+regression suites (591/591 web, plus every other package) re-run and
+green.
+
+**Deferred, explicitly out of scope**: `apps/web/app/data-subject-requests/**`
+was not modified. The list page (`data-subject-requests/page.tsx`)
+renders a raw `dsr.subjectId` UUID directly, and the execute-erasure
+surface (`data-subject-requests/[id]/erasure-actions.tsx`) is a minimal,
+unstyled M1.6-era component relying only on the word "irreversible" —
+both are real, pre-existing findings from this milestone's own audit,
+but predate the Activities/Notes/Tags domain this session has built
+since 2.3B and were explicitly frozen out of 2.3F's scope rather than
+silently pulled in. A second, narrower finding — `apps/web/app/deals/
+page.tsx`'s own list-column fallback (`contactNameById.get(...) ??
+"Deleted contact"`, line ~138) — was also left unchanged: it is
+defensive/unreachable dead code (the page's own resolution loop always
+populates `contactNameById` for every referenced id before this render
+function runs), was not part of the audit's named Finding B scope
+(`contact-display.ts`), and changing it would have widened this
+milestone beyond the approved, evidence-backed scope. Flagged here for a
+future pass, not fixed now.
+
+**Verification**: `pnpm install --frozen-lockfile` clean (lockfile
+unchanged); `pnpm audit --audit-level=high` clean; lint/typecheck clean,
+8/8 packages; `pnpm test` all green — database 477/477, auth 343/343, ui
+39/39, compliance 32/32 (including `contact-erasure`/`user-erasure`
+regression), crm 310/310, web 596/596 (up from 591, +5), tenancy 28/28;
+`pnpm build` clean; `git diff --check` clean; migration-safety gate pass,
+unchanged at 40 migrations; secret scan clean; confirmed zero
+`dangerouslySetInnerHTML` introduced; confirmed `package.json`/
+`pnpm-lock.yaml`/`packages/database`/`packages/crm`/`packages/auth`/
+`packages/compliance`/API routes/`data-subject-requests/**` all
+untouched (`git status`/`git diff --stat`).
+
+**Milestone 2.3F: COMPLETE.**
+
 **Milestone 2.3: IN PROGRESS.** 2.3A (database foundation + GDPR/
 retention wiring), 2.3B (domain layer), 2.3C (RBAC), 2.3D (API layer),
-and 2.3E (Activity Timeline UI) are implemented and verified; 2.3F–2.3G
-(GDPR UI copy polish, tests-across-the-stack closeout) have not started.
+2.3E (Activity Timeline UI), and 2.3F (GDPR-erasure vocabulary
+correction) are implemented and verified; 2.3G (tests-across-the-stack
+closeout) has not started.
 
 ---
 

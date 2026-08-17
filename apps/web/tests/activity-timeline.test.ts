@@ -17,6 +17,7 @@ import {
 import { listActiveOwnerOptions } from "../app/_shared/owner-options";
 import { loadTimeline } from "../app/_shared/activity-timeline/loader";
 import { resolveRelatedToLabel } from "../app/_shared/activity-timeline/related-label";
+import { resolveCreatorLabel } from "../app/_shared/activity-timeline/creator-label";
 import { parseTimelineLimit } from "../app/_shared/activity-timeline/timeline-limit";
 import {
   createActivityForResolvedContext,
@@ -201,6 +202,59 @@ describe("loadTimeline: GDPR historical state — empirically confirmed unreacha
     expect(entry).toBeDefined();
     expect(entry?.subject).toBeNull();
     expect(entry?.body).toBeNull();
+  });
+
+  it("Milestone 2.3F: an Activity whose created_by has been nulled (simulating the execute_user_erasure() ON DELETE SET NULL cascade) is REACHABLE, unlike the contact-erasure case above — and the section.tsx mapping composition (loadTimeline's creatorLabel piped through resolveCreatorLabel) yields 'Erased user', never 'Unknown' or a raw id", async () => {
+    const { organizationId, userId } = await createOrgWithRole("org_admin");
+    const contact = await seedContact(organizationId);
+    const activityId = await seedActivity(organizationId, "contact", contact, { subject: "Survives creator erasure" });
+    // created_by going null on an EXISTING row, with related_to_id left
+    // untouched, is exactly the shape execute_user_erasure()'s FK cascade
+    // produces (packages/database) — distinct from the contact-erasure
+    // case, which nulls related_to_id instead and is unreachable.
+    await adminPool.query("update public.activities set created_by = null where id = $1", [activityId]);
+
+    const ownerOptions = await listActiveOwnerOptions({ userId, organizationId, roleKey: "org_admin" });
+    const result = await loadTimeline(userId, "contact", contact, 25, ownerOptions);
+
+    expect(result.error).toBeNull();
+    const entry = result.entries.find((e) => e.id === activityId);
+    expect(entry).toBeDefined();
+    expect(entry?.creatorLabel).toBeNull(); // raw loader output — not yet resolved to display copy
+    // This is the exact composition apps/web/app/_shared/activity-timeline/section.tsx
+    // applies before handing entries to packages/ui's <ActivityTimeline>.
+    expect(resolveCreatorLabel(entry!.creatorLabel)).toBe("Erased user");
+    expect(resolveCreatorLabel(entry!.creatorLabel)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+  });
+
+  it("a normal, non-erased creator's resolved label passes through resolveCreatorLabel unchanged", async () => {
+    const { organizationId, userId } = await createOrgWithRole("org_admin");
+    const contact = await seedContact(organizationId);
+    const activityId = await seedActivity(organizationId, "contact", contact, { createdBy: userId });
+
+    const ownerOptions = await listActiveOwnerOptions({ userId, organizationId, roleKey: "org_admin" });
+    const result = await loadTimeline(userId, "contact", contact, 25, ownerOptions);
+    const entry = result.entries.find((e) => e.id === activityId);
+
+    expect(entry?.creatorLabel).not.toBeNull();
+    expect(resolveCreatorLabel(entry!.creatorLabel)).toBe(entry!.creatorLabel);
+  });
+});
+
+describe("resolveCreatorLabel", () => {
+  it("returns 'Erased user' for a null creatorLabel (createdBy nulled by GDPR user erasure)", () => {
+    expect(resolveCreatorLabel(null)).toBe("Erased user");
+  });
+
+  it("passes a resolved label through unchanged", () => {
+    expect(resolveCreatorLabel("Jane Doe")).toBe("Jane Doe");
+  });
+
+  it("never renders 'Unknown', 'Deleted user', or a raw UUID for the null case", () => {
+    const label = resolveCreatorLabel(null);
+    expect(label).not.toBe("Unknown");
+    expect(label).not.toMatch(/Deleted/);
+    expect(label).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
   });
 });
 

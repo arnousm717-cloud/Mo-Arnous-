@@ -2,6 +2,7 @@ import { can } from "@ai-revenue-os/auth";
 import { ActivityTimeline, TagList, type TimelineEntry } from "@ai-revenue-os/ui";
 import { listActiveOwnerOptions } from "../owner-options";
 import { loadTimeline } from "./loader";
+import { resolveCreatorLabel } from "./creator-label";
 import { listAttachedTagsForResolvedContext } from "./tag-logic";
 import { ActivityCreateForm, type EditableActivity } from "./activity-form";
 import { NoteCreateForm, type EditableNote } from "./note-form";
@@ -65,6 +66,7 @@ export async function ActivityTimelineSection({
         entry.kind === "activity"
           ? {
               ...entry,
+              creatorLabel: resolveCreatorLabel(entry.creatorLabel),
               actions: (
                 <ActivityEntryActions
                   activity={
@@ -83,6 +85,7 @@ export async function ActivityTimelineSection({
             }
           : {
               ...entry,
+              creatorLabel: resolveCreatorLabel(entry.creatorLabel),
               actions: (
                 <NoteEntryActions
                   note={{ id: entry.id, body: entry.body } satisfies EditableNote}
