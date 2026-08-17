@@ -1489,13 +1489,15 @@ Milestone 2.1's own requirements.
 
 ---
 
-## Milestone 2.2 — Deals & Pipelines (design record)
+## Milestone 2.2 — Deals & Pipelines
 
-Milestone 2.2 is **Deals & Pipelines (kanban)**. Full implementation has
-**not started** — this section records only the frozen design decisions
-made during planning, and the one prerequisite sub-step (2.2-P0) that has
-been implemented so far. No `deals`/`pipelines`/`pipeline_stages` table,
-RLS policy, RBAC key, or API route exists yet.
+Milestone 2.2 is **Deals & Pipelines (kanban)**. **Status: CLOSED** — full
+implementation (2.2-P0 through 2.2H) is complete; see the "Milestone 2.2
+— Overall Closeout" entry at the end of this section for the final
+sign-off record and evidence. The remainder of this section is kept as
+written during planning and implementation: the six design decisions
+frozen up front, followed by each sub-milestone's own entry in the order
+it was actually built.
 
 Six design decisions were frozen before any implementation began:
 
@@ -1514,8 +1516,8 @@ Also frozen: `stage_id` is the single source of truth for a deal's
 won/lost state — `deals.status` is fully derived by the domain layer from
 `stage_id`, never independently settable via the API.
 
-None of decisions 2–6 have been implemented. Only decision 1's
-prerequisite is done.
+All six decisions above are implemented — see each sub-milestone entry
+below, in build order, starting with decision 1's own prerequisite step.
 
 ### Milestone 2.2-P0 — Organization Member Identity Display
 
@@ -2554,8 +2556,99 @@ full-parallel monorepo run in `contact-erasure.test.ts`'s pre-existing,
 under parallel load, passes cleanly in isolation and on every other run;
 not a 2.2 regression, not modified or weakened by this remediation.
 
-**Milestone 2.2G: PASS.** **Milestone 2.2 overall remains open** — 2.2H
-(manual/staging verification) has not started.
+**Milestone 2.2G: PASS.** Full closeout record, including 2.2H, follows
+in the "Milestone 2.2 — Overall Closeout" entry below.
+
+---
+
+### Milestone 2.2 — Overall Closeout
+
+Milestone 2.2H (staging deployment & live verification) ran in four
+parts after 2.2G closed. This entry distinguishes three separate tiers
+of evidence — automated technical evidence, staging-database
+verification, and manual production verification — rather than
+presenting them as one undifferentiated claim.
+
+**2.2H Phase 1 — pre-deployment read-only audit.** Confirmed, before any
+write: the linked Supabase project is `damunjcpwxthdjaonatb`, name
+`ai-revenue-os-staging` (not the unlinked, differently-named other
+project on the same account) — the only staging-identity check this
+milestone required before authorizing a write. Confirmed the pending
+migration set was exactly the five Milestone 2.2 migrations, with zero
+drift against local history. Re-confirmed the migration source's own
+security posture (RLS enabled, `authenticated`-only grants with no
+`DELETE`, no `anon` grant, `seed_default_pipeline` ungrantable to
+`authenticated`/`anon`, `SECURITY DEFINER` + explicit `search_path` on
+all three new functions) directly from the migration files. No Vercel
+project link, credential, or documented staging URL was found in this
+environment — noted as a gap for Phase 2C/2D, later closed by the manual
+production verification below instead.
+
+**2.2H Phase 2A — staging migration apply.** The five pending migrations
+(`20260814090000`, `20260814100000`, `20260814100100`, `20260814100200`,
+`20260814110000`) were applied to `damunjcpwxthdjaonatb` via
+`supabase db push --linked`. Post-push `supabase migration list`
+confirmed all 36 migrations synchronized (local timestamp = remote
+timestamp), zero pending, zero remote-only entries.
+
+**2.2H Phase 2B — staging database verification (live, catalog-level,
+not merely re-reading migration source).** Columns, constraints, and
+indexes for `pipelines`/`pipeline_stages`/`deals` were read directly
+from staging's `pg_attribute`/`pg_constraint`/`pg_indexes` and matched
+the migration source exactly, including the `pipelines_org_active_
+default_idx` partial unique index and the full two-composite-FK design
+on `deals` (`deals_stage_org_fk` + `deals_stage_pipeline_fk`,
+`deals_contact_org_fk ... on delete set null`). RLS was confirmed
+enabled live (`pg_class.relrowsecurity = true`) with exactly the nine
+expected `organization_id = current_org()` policies and no others. Live
+`has_table_privilege`/`has_function_privilege` checks confirmed
+`authenticated` has `select/insert/update` but never `delete` on any of
+the three tables, `anon` has none of the four, and `seed_default_pipeline`
+has no `EXECUTE` grant to `authenticated` or `anon` at all. All three
+`SECURITY DEFINER` function bodies, pulled live via
+`pg_get_functiondef`, were byte-for-byte identical to the committed
+migration source. Aggregate row counts (2 organizations → 2 pipelines →
+10 stages) were consistent with every pre-existing organization
+receiving exactly one seeded default pipeline with exactly five stages,
+though a per-organization row-level breakdown was not obtainable with
+the credentials available in that session (documented as a LOW-severity,
+non-blocking coverage gap in the Phase 2B report — the structural
+guarantees that make a duplicate or missing default impossible were
+independently confirmed live regardless). One process incident occurred
+during this phase — a CLI command briefly printed the staging project's
+service-role key to command output; it was not reused, persisted, or
+committed anywhere, and key rotation was recommended as a follow-up
+outside this documentation-only step's scope.
+
+**Manual production verification (user-attested — not independently
+performed or technically re-verified by the assistant; no Production
+access exists in this environment).** Confirmed working directly against
+the deployed Production application: login; dashboard; authenticated
+`org_admin` session; Companies; Contacts; Deals list/create; Deals
+board; Pipelines list; pipeline detail/edit; the default "Sales Pipeline"
+existing with its five stages (Lead/10, Qualified/20, Proposal/30,
+Won/40 `is_won_stage=true`, Lost/50 `is_lost_stage=true`); creating a new
+pipeline; adding a new stage; the active default pipeline's delete
+protection; the production database connection; and tenant/organization
+context resolution for the logged-in user.
+
+**Automated technical evidence, re-run at closeout (commit
+`6ef77c9718431720e7f60a237adb442e4d980e33`, `main`, working tree
+clean).** `pnpm lint` clean across all 8 packages; `pnpm typecheck` clean
+across all 8 packages; `pnpm test` **1377/1377 passing**, 0 failed,
+across all 7 tested packages (database 391, auth 257, tenancy 28,
+compliance 27, crm 195, ui 39, web 440); `pnpm build` clean, every
+Deals/Pipelines route present in the build output. No open blocking
+defect exists — 2.2G's one MEDIUM finding (missing GDPR-erasure/deal-
+survival regression coverage) was remediated and closed in the same
+commit; remaining LOW/INFORMATIONAL items across 2.2G and 2.2H Phase 2B
+are documented in their own entries above and are explicitly
+non-blocking.
+
+**Milestone 2.2: PASS — CLOSED.** Every gate has passed: implementation
+complete (2.2-P0 through 2.2G), staging database state verified live
+with zero drift, and production functional behavior confirmed manually
+by the project owner. Milestone 2.3 has not started.
 
 ---
 
