@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthenticatedUser, resolveAgencyRequestContext } from "@ai-revenue-os/auth";
 import { getAgencyById, listOrganizationsForAgency } from "@ai-revenue-os/tenancy";
@@ -9,6 +10,12 @@ import { decideAgencyConsoleAccess } from "./access";
  * impersonation/client-entry workflow, no CRM UI, docs/07-UI-UX-System.md
  * §6). Access logic lives in ./access.ts's decideAgencyConsoleAccess() so
  * it's testable independent of this Server Component.
+ *
+ * Milestone 2.4D adds four navigation links to the read-only CRM roll-up
+ * pages (companies/contacts/deals/pipelines) — no other change to this
+ * shell. Each linked page independently re-resolves and re-checks its own
+ * agency-rollup-read permission; a link being visible here is not itself
+ * an authorization decision.
  */
 export default async function AgencyConsolePage(): Promise<React.ReactElement> {
   const user = await getAuthenticatedUser();
@@ -30,6 +37,16 @@ export default async function AgencyConsolePage(): Promise<React.ReactElement> {
         <h1>{agency?.name ?? "Agency Console"}</h1>
         <p>Role: {decision.agencyContext.roleKey}</p>
       </header>
+
+      <nav>
+        <Link href="/agency/companies">Companies</Link>
+        {" | "}
+        <Link href="/agency/contacts">Contacts</Link>
+        {" | "}
+        <Link href="/agency/deals">Deals</Link>
+        {" | "}
+        <Link href="/agency/pipelines">Pipelines</Link>
+      </nav>
 
       <section>
         <h2>Client organizations</h2>
