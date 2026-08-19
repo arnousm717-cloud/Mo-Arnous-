@@ -47,6 +47,10 @@ const PERMISSIONS: PermissionKey[] = [
   "tags:create",
   "tags:update",
   "tags:delete",
+  "companies:agency-rollup-read",
+  "contacts:agency-rollup-read",
+  "deals:agency-rollup-read",
+  "pipelines:agency-rollup-read",
 ];
 
 /**
@@ -116,6 +120,14 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "tags:create": false,
     "tags:update": false,
     "tags:delete": false,
+    // Milestone 2.4B: agency roll-up read — the one deliberate exception
+    // to the "agency roles get zero direct CRM access" pattern above,
+    // since these four specifically authorize reading the Milestone 2.4A
+    // agency_rollup_* views, not the base org-scoped tables.
+    "companies:agency-rollup-read": true,
+    "contacts:agency-rollup-read": true,
+    "deals:agency-rollup-read": true,
+    "pipelines:agency-rollup-read": true,
   },
   agency_admin: {
     "organizations:read": false,
@@ -160,6 +172,13 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "tags:create": false,
     "tags:update": false,
     "tags:delete": false,
+    // Milestone 2.4B: agency roll-up read — granted, identically to
+    // agency_owner (the "agency_admin does not get billing" style
+    // exception does not apply here; both agency roles get all 4).
+    "companies:agency-rollup-read": true,
+    "contacts:agency-rollup-read": true,
+    "deals:agency-rollup-read": true,
+    "pipelines:agency-rollup-read": true,
   },
   org_admin: {
     "organizations:read": true,
@@ -208,6 +227,13 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "tags:create": true,
     "tags:update": true,
     "tags:delete": true,
+    // Milestone 2.4B: agency roll-up read is agency-scoped only —
+    // org_admin's own standalone-org CRM CRUD above is unrelated and does
+    // not extend to these four.
+    "companies:agency-rollup-read": false,
+    "contacts:agency-rollup-read": false,
+    "deals:agency-rollup-read": false,
+    "pipelines:agency-rollup-read": false,
   },
   org_member: {
     "organizations:read": true,
@@ -259,6 +285,11 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "tags:create": true,
     "tags:update": true,
     "tags:delete": false,
+    // Milestone 2.4B: agency roll-up read is agency-scoped only.
+    "companies:agency-rollup-read": false,
+    "contacts:agency-rollup-read": false,
+    "deals:agency-rollup-read": false,
+    "pipelines:agency-rollup-read": false,
   },
   org_viewer: {
     "organizations:read": true,
@@ -306,6 +337,11 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "tags:create": false,
     "tags:update": false,
     "tags:delete": false,
+    // Milestone 2.4B: agency roll-up read is agency-scoped only.
+    "companies:agency-rollup-read": false,
+    "contacts:agency-rollup-read": false,
+    "deals:agency-rollup-read": false,
+    "pipelines:agency-rollup-read": false,
   },
   portal_customer: {
     "organizations:read": false,
@@ -350,6 +386,10 @@ const EXPECTED: Record<(typeof ROLES)[number], Partial<Record<PermissionKey, boo
     "tags:create": false,
     "tags:update": false,
     "tags:delete": false,
+    "companies:agency-rollup-read": false,
+    "contacts:agency-rollup-read": false,
+    "deals:agency-rollup-read": false,
+    "pipelines:agency-rollup-read": false,
   },
 };
 
@@ -761,6 +801,58 @@ describe("can(): Milestone 2.1E — pre-existing 14 permissions unaffected", () 
       }
     }
   });
+
+  it("every pre-2.4B permission (including the twelve 2.3C Activities/Notes/Tags keys) is unchanged for every role", () => {
+    const preExisting2_4B: PermissionKey[] = [
+      "organizations:read",
+      "organizations:list-clients",
+      "organizations:create-client",
+      "organizations:manage-billing",
+      "organizations:manage-users",
+      "organizations:manage-settings",
+      "agencies:read",
+      "agencies:manage-branding",
+      "agencies:manage-billing",
+      "agencies:manage-domains",
+      "consent:record",
+      "data-subject-requests:create",
+      "data-subject-requests:read",
+      "data-subject-requests:execute",
+      "companies:read",
+      "companies:create",
+      "companies:update",
+      "companies:delete",
+      "contacts:read",
+      "contacts:create",
+      "contacts:update",
+      "contacts:delete",
+      "deals:read",
+      "deals:create",
+      "deals:update",
+      "deals:delete",
+      "pipelines:read",
+      "pipelines:create",
+      "pipelines:update",
+      "pipelines:delete",
+      "activities:read",
+      "activities:create",
+      "activities:update",
+      "activities:delete",
+      "notes:read",
+      "notes:create",
+      "notes:update",
+      "notes:delete",
+      "tags:read",
+      "tags:create",
+      "tags:update",
+      "tags:delete",
+    ];
+    for (const role of ROLES) {
+      for (const permission of preExisting2_4B) {
+        expect(can(actorFor(role), permission)).toBe(EXPECTED[role][permission]);
+      }
+    }
+  });
 });
 
 describe("can(): Milestone 2.2C — Deals/Pipelines permissions", () => {
@@ -1069,6 +1161,144 @@ describe("can(): Milestone 2.3C — unknown role/action remains fail-closed, can
     ] as const) {
       expect(() => can(actor, permission)).not.toThrow();
       expect(can(actor, permission)).toBe(false);
+    }
+  });
+});
+
+describe("can(): Milestone 2.4B — Agency roll-up read permissions", () => {
+  const ROLLUP_KEYS = [
+    "companies:agency-rollup-read",
+    "contacts:agency-rollup-read",
+    "deals:agency-rollup-read",
+    "pipelines:agency-rollup-read",
+  ] as const;
+
+  it("agency_owner is granted all 4 agency-rollup-read permissions", () => {
+    const actor = actorFor("agency_owner");
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(actor, permission)).toBe(true);
+    }
+  });
+
+  it("agency_admin is granted all 4 agency-rollup-read permissions", () => {
+    const actor = actorFor("agency_admin");
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(actor, permission)).toBe(true);
+    }
+  });
+
+  it("org_admin is denied all 4 — org-scoped roles never resolve current_agency() in the first place", () => {
+    const actor = actorFor("org_admin");
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("org_member is denied all 4", () => {
+    const actor = actorFor("org_member");
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("org_viewer is denied all 4", () => {
+    const actor = actorFor("org_viewer");
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("portal_customer is denied all 4", () => {
+    const actor = actorFor("portal_customer");
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(actor, permission)).toBe(false);
+    }
+  });
+
+  it("a null (unauthenticated) actor is denied all 4", () => {
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(null, permission)).toBe(false);
+    }
+  });
+
+  it("no write-shaped variant exists — no agency-rollup-create/-update/-delete key is present in the PermissionKey union's runtime values for any resource", () => {
+    for (const resource of ["companies", "contacts", "deals", "pipelines"]) {
+      for (const verb of ["agency-rollup-create", "agency-rollup-update", "agency-rollup-delete"]) {
+        expect(PERMISSIONS.includes(`${resource}:${verb}` as PermissionKey)).toBe(false);
+      }
+    }
+  });
+
+  it("no role other than agency_owner/agency_admin holds any agency-rollup-read key in its grants object — a structural check, not a re-derivation of expected VALUES (which stay independently hand-written above)", () => {
+    for (const role of ROLES) {
+      if (role === "agency_owner" || role === "agency_admin") continue;
+      const grantedKeys = Object.keys(PERMISSION_MATRIX[role]);
+      expect(
+        grantedKeys.some(
+          (key) =>
+            key.startsWith("companies:agency-rollup") ||
+            key.startsWith("contacts:agency-rollup") ||
+            key.startsWith("deals:agency-rollup") ||
+            key.startsWith("pipelines:agency-rollup"),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("existing organizations:list-clients behavior is unchanged for every role", () => {
+    for (const role of ROLES) {
+      expect(can(actorFor(role), "organizations:list-clients")).toBe(EXPECTED[role]["organizations:list-clients"]);
+    }
+  });
+
+  it("existing org-scoped CRM permissions (companies:*/contacts:*/deals:*/pipelines:*) are unaffected for org_admin/org_member/org_viewer", () => {
+    const orgAdmin = actorFor("org_admin");
+    expect(can(orgAdmin, "companies:read")).toBe(true);
+    expect(can(orgAdmin, "companies:delete")).toBe(true);
+    expect(can(orgAdmin, "deals:delete")).toBe(true);
+    expect(can(orgAdmin, "pipelines:delete")).toBe(true);
+
+    const orgMember = actorFor("org_member");
+    expect(can(orgMember, "companies:read")).toBe(true);
+    expect(can(orgMember, "companies:delete")).toBe(false);
+    expect(can(orgMember, "deals:read")).toBe(true);
+    expect(can(orgMember, "pipelines:create")).toBe(false);
+
+    const orgViewer = actorFor("org_viewer");
+    expect(can(orgViewer, "contacts:read")).toBe(true);
+    expect(can(orgViewer, "contacts:create")).toBe(false);
+  });
+
+  it("agency roll-up read permissions are checked without a per-call resource id, matching this file's own established precedent for agency-wide grants (organizations:list-clients) — the actual cross-org data scoping is the 2.4A views' own responsibility, not can()'s", () => {
+    const actor = actorFor("agency_owner");
+    for (const permission of ROLLUP_KEYS) {
+      expect(can(actor, permission)).toBe(true);
+    }
+  });
+
+  it("agency_owner/agency_admin do not thereby acquire any org-scoped CRM key — the four new grants are additive, not a broadening of an existing key's meaning", () => {
+    for (const role of ["agency_owner", "agency_admin"] as const) {
+      const actor = actorFor(role);
+      for (const permission of [
+        "companies:read",
+        "companies:create",
+        "companies:update",
+        "companies:delete",
+        "contacts:read",
+        "contacts:create",
+        "contacts:update",
+        "contacts:delete",
+        "deals:read",
+        "deals:create",
+        "deals:update",
+        "deals:delete",
+        "pipelines:read",
+        "pipelines:create",
+        "pipelines:update",
+        "pipelines:delete",
+      ] as const) {
+        expect(can(actor, permission)).toBe(false);
+      }
     }
   });
 });

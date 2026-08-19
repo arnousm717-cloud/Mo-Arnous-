@@ -63,7 +63,11 @@ export type PermissionKey =
   | "tags:read"
   | "tags:create"
   | "tags:update"
-  | "tags:delete";
+  | "tags:delete"
+  | "companies:agency-rollup-read"
+  | "contacts:agency-rollup-read"
+  | "deals:agency-rollup-read"
+  | "pipelines:agency-rollup-read";
 
 export interface Actor {
   userId: string;
@@ -168,6 +172,31 @@ type PermissionGrants = Partial<Record<PermissionKey, true>>;
  * "update a tagging" case — Taggings have no update operation at any
  * layer (2.3A schema, 2.3B domain layer) — so tags:update is never
  * consulted for a tagging route.
+ *
+ * companies:agency-rollup-read / contacts:agency-rollup-read /
+ * deals:agency-rollup-read / pipelines:agency-rollup-read (Milestone
+ * 2.4B, docs/13 "Milestone 2.4" frozen decision): the application-layer
+ * defense-in-depth counterpart to the four agency_rollup_* database views
+ * (Milestone 2.4A) — these keys do NOT replace or weaken the database
+ * security boundary those views already enforce (security_invoker=false,
+ * current_agency()/current_role_key() in their own WHERE clause,
+ * SELECT-only grants); can() is checked in addition to that, never
+ * instead of it. Deliberately four separate read-only keys, not one
+ * generic "agency:rollup-read" — matches this file's own established
+ * one-key-per-resource-family convention (never a wildcard/catch-all
+ * permission) and keeps the door open for a future role to receive
+ * roll-up visibility into only some resources, without a redesign.
+ * Granted ONLY to agency_owner/agency_admin — no org-scoped role
+ * (org_admin/org_member/org_viewer) receives any of these four, since an
+ * org-scoped Actor carries organizationId, not agencyId, and could never
+ * legitimately resolve current_agency() in the first place; granting the
+ * key would be meaningless permission-matrix noise, not a real capability.
+ * portal_customer gets none either. No create/update/delete variant
+ * exists for any of the four — the roll-up views themselves are
+ * structurally read-only (2.4A: no INSERT/UPDATE/DELETE grant exists on
+ * any of them), so a write-shaped permission key would authorize an
+ * operation with no corresponding code path, which this codebase never
+ * does.
  */
 export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
   agency_owner: {
@@ -177,6 +206,10 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "agencies:manage-branding": true,
     "agencies:manage-billing": true,
     "agencies:manage-domains": true,
+    "companies:agency-rollup-read": true,
+    "contacts:agency-rollup-read": true,
+    "deals:agency-rollup-read": true,
+    "pipelines:agency-rollup-read": true,
   },
   agency_admin: {
     "organizations:list-clients": true,
@@ -184,6 +217,10 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "agencies:read": true,
     "agencies:manage-branding": true,
     "agencies:manage-domains": true,
+    "companies:agency-rollup-read": true,
+    "contacts:agency-rollup-read": true,
+    "deals:agency-rollup-read": true,
+    "pipelines:agency-rollup-read": true,
   },
   org_admin: {
     "organizations:read": true,
