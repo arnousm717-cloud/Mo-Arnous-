@@ -3433,11 +3433,143 @@ untouched (`git status`/`git diff --stat`).
 
 **Milestone 2.3F: COMPLETE.**
 
-**Milestone 2.3: IN PROGRESS.** 2.3A (database foundation + GDPR/
-retention wiring), 2.3B (domain layer), 2.3C (RBAC), 2.3D (API layer),
-2.3E (Activity Timeline UI), and 2.3F (GDPR-erasure vocabulary
-correction) are implemented and verified; 2.3G (tests-across-the-stack
-closeout) has not started.
+### Milestone 2.3 — Overall Closeout
+
+Milestone 2.3G ran in four parts, mirroring the 2.2G/2.2H precedent
+(final adversarial audit, then staging deployment + live database
+verification, then manual staging application verification, then this
+closeout record) — with one real, disclosed incident along the way,
+consistent with this project's practice of recording what actually
+happened rather than only the parts that went smoothly.
+
+**2.3G Phase 1 — final cross-stack audit.** A fresh, from-source audit
+of the complete 2.3A–2.3F implementation (database, domain, RBAC, API,
+UI, GDPR behavior) found every layer COMPLETE, with one real, narrow
+test-coverage gap: `activity-timeline.test.ts` had an explicit cross-org
+regression test for `activity-logic.ts` but not for `note-logic.ts` or
+`tag-logic.ts`, even though the 2.3D API layer beneath already covered
+cross-org rejection exhaustively for all four resources. No genuine
+security/privacy defect was found — no cross-tenant leak, no RBAC/RLS
+bypass, no PII exposure, no unsafe dynamic SQL, no exposed secret. Two
+narrow, non-blocking items were newly discovered and explicitly deferred
+as outside Milestone 2.3's own scope: pre-2.3 resources
+(companies/contacts/deals/pipelines) lack the `isValidUuid` path-parameter
+guard that 2.3D's own routes have (relies on Next.js's untested-by-this-repo
+production error suppression instead); and a dead, unreachable
+`"Deleted contact"` string in `deals/page.tsx`'s own list-column fallback
+(the page's resolution loop always populates the lookup map before this
+branch could fire). Neither required a scope-widening stop.
+
+**2.3G Phase 2A — cross-stack test-gap closure.** Two tests added to
+`activity-timeline.test.ts` (`note-logic`/`tag-logic` cross-org
+rejection, mirroring the existing `activity-logic` test exactly),
+closing the one real gap from Phase 1. Test-only change (54 lines, one
+file). Committed `93a5bca` (`test: close Milestone 2.3 cross-stack
+tenant-isolation gaps`), pushed, GitHub Actions CI #98 user-verified
+green.
+
+**2.3G Phase 2B/2C — staging deployment + live verification.** The four
+pending Milestone 2.3 migrations (`20260817090000`/`090100`/`090200`/`090300`)
+were identified via a read-only `supabase migration list --linked`
+comparison against the confirmed staging project
+(`damunjcpwxthdjaonatb`, `ai-revenue-os-staging`) — 36 of 40 local
+migrations already applied, zero drift, zero unexpected entries. Applied
+via `supabase db push --linked`; one non-blocking warning occurred (a
+separate post-push catalog-caching step failing on a missing certificate
+file inside the CLI's own internal sandboxed edge-runtime path,
+unrelated to the migration application itself — independently confirmed
+non-blocking via a fresh post-push `migration list` showing all 40
+migrations synchronized, zero drift). Live catalog-level verification
+(not a re-read of migration source) confirmed: all 4 tables present with
+correct column nullability, constraints, and indexes; RLS enabled on all
+4 with the exact intended policy set (no `DELETE` policy on
+activities/notes/tags, no `UPDATE` policy on taggings); zero `anon`
+grants; `execute_contact_erasure()`'s live body confirmed to contain the
+NULL-safe auth guard and all three scrub/delete steps; both platform
+retention entries present at 2555 days; the `roles.permission_set`
+snapshot correctly reflects the 12 new keys per role, matching
+`PERMISSION_MATRIX` exactly.
+
+**2.3G Phase 2D — manual staging application verification, including
+one real incident.** The first Preview build attempt failed because the
+Preview environment was missing `DATABASE_URL` entirely — fixed by
+adding it (the Supabase Transaction Pooler connection string) to the
+Preview environment specifically, never touching Production. Once fixed,
+the build succeeded, and `apps/web/scripts/verify-preview-environment.mjs`
+(the real, already-wired M1.9 build-gate — not merely the synthetic unit
+test) is what actually validated the Preview deployment's
+`NEXT_PUBLIC_SUPABASE_URL`/`DATABASE_URL` against the expected staging
+project ref live, before the build was allowed to proceed. Application
+verification then proceeded successfully: Activity/Note/Tag
+create/update/delete/attach/detach all confirmed working against real
+staging data.
+
+For RBAC-specific verification, two temporary staging-only test accounts
+were needed (org_member, org_viewer) — none existed previously, since
+this product currently has no invite/member-management UI at all (a
+finding surfaced during this same investigation: `create_organization_with_owner()`,
+the only membership-creating code path, always assigns `org_admin`).
+Creating them via the Supabase Auth Admin API (not raw SQL) plus one
+narrow, exactly-scoped `INSERT` into `memberships` surfaced a real,
+genuine incident: both new accounts could log in but `/dashboard`
+reported "Your account isn't linked to an organization yet," despite a
+correct, verified-active `memberships` row. Root-caused (proven both
+from source and live query, not guessed) to `public.users.default_organization_id`
+being left `NULL` — `get_my_membership_context()`
+(`packages/database/supabase/migrations/20260806100859_create_membership_context_function.sql`)
+reads this field first and returns zero rows before ever reaching the
+`memberships` join if it's null, unlike the normal signup path
+(`create_organization_with_owner()`), which sets it atomically in the
+same transaction as the membership itself — a step the manual
+account-creation plan had not accounted for. Fixed with a single,
+exactly-scoped `UPDATE public.users SET default_organization_id = ...
+WHERE id IN (<the two test user ids>)`, touching no other row, no RLS
+policy, no migration, and no application code. Re-verified after the
+fix: both users' `get_my_membership_context()` confirmed live (via
+simulated JWT claims inside a read-only `BEGIN...ROLLBACK`, never
+persisted) to return the correct organization/role; both users
+confirmed, live, to see zero rows of a second, unrelated staging
+organization's data (direct RLS proof, not inference); `/dashboard`
+manually confirmed working for both accounts by the project owner, with
+the organization-context error gone.
+
+**Evidence-tier note, for transparency against the 2.1/2.2 precedent**:
+2.1 and 2.2's own closeouts each recorded a *separate* "manual production
+verification" tier, distinct from staging (2.2H's fourth part explicitly
+labeled "user-attested — not independently performed by the assistant").
+For 2.3, the verification performed and described above was against the
+Vercel **Preview** deployment pointed at the staging Supabase project;
+no separately-described Production-deployment verification step
+occurred in this closeout. (2.1's own closeout separately noted that,
+at that time, the Vercel project auto-deployed every `main` push as a
+Production deployment too — whether that configuration still holds
+today, and whether it applies to the Preview deployment tested here, is
+not something this environment can independently confirm.) Recorded
+here as a factual observation, not a blocker — the project owner
+directed this closeout with the evidence above judged sufficient.
+
+**Automated technical evidence, re-run at closeout (commit `93a5bca`,
+`main`, working tree clean).** `pnpm lint`/`typecheck`/`build` clean
+across all 8 packages; `pnpm audit --audit-level=high` clean; `pnpm test`
+**1,827/1,827 passing** across all 7 tested packages (database 477, auth
+343, ui 39, compliance 32, crm 310, tenancy 28, web 598); migration-safety
+gate clean, 40 migrations, zero drift against staging; secret scan clean
+throughout every phase of 2.3G, including the live staging investigation
+(only public project refs/names/IDs were ever read or printed — no
+password, token, service-role key, or connection string was exposed at
+any point).
+
+**Milestone 2.3: PASS — CLOSED.** Every gate has passed: implementation
+complete (2.3A through 2.3F), a fresh final audit found no blocking
+defect, the one real test-coverage gap it found was closed, staging
+database state was verified live with zero drift, and staging
+*application* behavior — including RBAC across all three CRM-relevant
+roles (org_admin/org_member/org_viewer) — was confirmed working by the
+project owner, with one real incident (the Preview `DATABASE_URL`
+misconfiguration) and one real regression (manually-created memberships
+missing `default_organization_id`) found and fixed along the way, both
+disclosed above rather than omitted. Milestone 2.4 is next — see
+`docs/12-Implementation-Milestones.md`.
 
 ---
 
