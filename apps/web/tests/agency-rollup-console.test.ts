@@ -247,6 +247,49 @@ describe("agency roll-up console: I — zero write controls/actions exist on any
   });
 });
 
+describe("agency roll-up console: navigation — /agency links to all four roll-up pages with correct labels", () => {
+  const agencyPageSource = readFileSync(new URL("../app/agency/page.tsx", import.meta.url), "utf8");
+
+  const navEntries: Array<[href: string, label: string]> = [
+    ["/agency/companies", "Companies"],
+    ["/agency/contacts", "Contacts"],
+    ["/agency/deals", "Deals"],
+    ["/agency/pipelines", "Pipelines"],
+  ];
+
+  it.each(navEntries)("contains a <Link href=\"%s\"> whose visible label is exactly \"%s\"", (href, label) => {
+    // Tolerant of surrounding whitespace/line-breaks (JSX formatting is
+    // irrelevant here), but strict about the href value and the label
+    // text actually appearing together inside the same <Link> element —
+    // a missing entry, a wrong href, or a wrong label each fail this.
+    const escapedHref = href.replace(/\//g, "\\/");
+    const pattern = new RegExp(`<Link\\s+href="${escapedHref}">\\s*${label}\\s*<\\/Link>`);
+    expect(agencyPageSource).toMatch(pattern);
+  });
+
+  it("does not contain a stray Link to any other /agency/* path beyond the four roll-up pages", () => {
+    const hrefs = [...agencyPageSource.matchAll(/<Link\s+href="([^"]+)"/g)].map((match) => match[1]);
+    const agencySubPaths = hrefs.filter((href) => href?.startsWith("/agency/"));
+    expect(agencySubPaths.sort()).toEqual(
+      ["/agency/companies", "/agency/contacts", "/agency/deals", "/agency/pipelines"].sort(),
+    );
+  });
+});
+
+describe("agency roll-up console: navigation — each roll-up page links back to /agency", () => {
+  const backLinkPages = [
+    "app/agency/companies/page.tsx",
+    "app/agency/contacts/page.tsx",
+    "app/agency/deals/page.tsx",
+    "app/agency/pipelines/page.tsx",
+  ];
+
+  it.each(backLinkPages)("%s contains a <Link href=\"/agency\"> back to the agency console", (relativePath) => {
+    const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
+    expect(source).toMatch(/<Link\s+href="\/agency">/);
+  });
+});
+
 describe("agency roll-up console: J/K — organization label resolution and the unknown-organization fallback", () => {
   it("resolveOrganizationLabel returns the mapped name when present", () => {
     const orgId = randomUUID();
