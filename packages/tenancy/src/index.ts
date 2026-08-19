@@ -8,6 +8,16 @@ export {
   type OrganizationSummary,
 } from "./organizations";
 export { getAgencyById, type AgencySummary } from "./agencies";
+export {
+  listCompaniesForAgency,
+  listContactsForAgency,
+  listDealsForAgency,
+  listPipelinesForAgency,
+  type AgencyRollupCompany,
+  type AgencyRollupContact,
+  type AgencyRollupDeal,
+  type AgencyRollupPipeline,
+} from "./agency-rollup";
 export { slugify, slugWithSuffix } from "./slug";
 export {
   contrastRatio,
