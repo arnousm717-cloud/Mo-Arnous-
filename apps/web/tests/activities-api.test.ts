@@ -106,7 +106,11 @@ describe("activities API: tenancy / IDOR", () => {
     const missingGet = await handleGetActivity(orgA.userId, nonexistentId);
     expect(crossGet.status).toBe(404);
     expect(missingGet.status).toBe(404);
-    expect(await crossGet.json()).toEqual(await missingGet.json());
+    const crossGetBody = await crossGet.json();
+    const missingGetBody = await missingGet.json();
+    expect(crossGetBody.error.code).toBe(missingGetBody.error.code);
+    expect(crossGetBody.error.message).toBe(missingGetBody.error.message);
+    expect(crossGetBody.error.request_id).not.toBe(missingGetBody.error.request_id);
 
     expect((await handleUpdateActivity(orgA.userId, activityB, { subject: "x" }, null)).status).toBe(404);
     expect((await handleDeleteActivity(orgA.userId, activityB)).status).toBe(404);
@@ -140,7 +144,11 @@ describe("activities API: relationship create attacks (cross-org target)", () =>
       null,
     );
     expect(nonexistentRes.status).toBe(400);
-    expect(await res.json()).toEqual(await nonexistentRes.json());
+    const resBody = await res.json();
+    const nonexistentResBody = await nonexistentRes.json();
+    expect(resBody.error.code).toBe(nonexistentResBody.error.code);
+    expect(resBody.error.message).toBe(nonexistentResBody.error.message);
+    expect(resBody.error.request_id).not.toBe(nonexistentResBody.error.request_id);
   });
 
   it("Activity Org A -> Contact Org B -> 400", async () => {

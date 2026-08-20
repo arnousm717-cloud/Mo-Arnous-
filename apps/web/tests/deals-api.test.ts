@@ -112,7 +112,11 @@ describe("deals API: tenancy", () => {
     const missingGet = await handleGetDeal(orgA.userId, nonexistentId);
     expect(crossGet.status).toBe(404);
     expect(missingGet.status).toBe(404);
-    expect(await crossGet.json()).toEqual(await missingGet.json());
+    const crossGetBody = await crossGet.json();
+    const missingGetBody = await missingGet.json();
+    expect(crossGetBody.error.code).toBe(missingGetBody.error.code);
+    expect(crossGetBody.error.message).toBe(missingGetBody.error.message);
+    expect(crossGetBody.error.request_id).not.toBe(missingGetBody.error.request_id);
 
     expect((await handleUpdateDeal(orgA.userId, dealB, { amount: 1 }, null)).status).toBe(404);
     expect((await handleDeleteDeal(orgA.userId, dealB)).status).toBe(404);

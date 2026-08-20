@@ -53,10 +53,10 @@ export async function createContactForResolvedContext(
   if (ownerId !== undefined) body.ownerId = ownerId;
 
   const response = await handleCreateContact(userId, body, idempotencyKey);
-  const data = (await response.json()) as { contact?: { id: string }; error?: string };
+  const data = (await response.json()) as { contact?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 201 && data.contact) {
     return { createdId: data.contact.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to create the contact. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to create the contact. Please try again." };
 }

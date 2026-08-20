@@ -72,7 +72,7 @@ export default async function DealsPage({
   const url = new URL(`http://internal/deals?${params.toString()}`);
 
   const response = await handleListDeals(userId, url);
-  const data = (await response.json()) as { deals?: DealRow[]; nextCursor?: string | null; error?: string };
+  const data = (await response.json()) as { deals?: DealRow[]; nextCursor?: string | null; error?: { code: string; message: string; request_id: string } };
   const rows = data.deals ?? [];
 
   const actor = { userId, organizationId, roleKey };
@@ -235,7 +235,7 @@ export default async function DealsPage({
           getRowId={(row) => row.id}
           state={tableState}
           emptyMessage="No deals yet."
-          errorMessage={typeof data.error === "string" ? data.error : "Failed to load deals."}
+          errorMessage={typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to load deals."}
         />
 
         {data.nextCursor ? (

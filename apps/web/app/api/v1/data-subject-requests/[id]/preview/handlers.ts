@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { can, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
 import { getDataSubjectRequestById, previewUserErasure, previewContactErasure } from "@ai-revenue-os/compliance";
+import { apiError } from "../../../_shared/api-error";
 
 /**
  * Dry-run (M1.6 Decision D, dispatch added M2.1F-C) — never mutates data. A
@@ -20,24 +21,21 @@ import { getDataSubjectRequestById, previewUserErasure, previewContactErasure } 
  */
 export async function handlePreviewErasure(userId: string | null, id: string): Promise<NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
 
   const orgContext = await resolveOrganizationContextForUser(userId);
   if (!orgContext || !can({ userId, ...orgContext }, "data-subject-requests:execute")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
 
   const dsr = await getDataSubjectRequestById({ userId, ...orgContext }, id);
   if (!dsr) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   if (dsr.subjectType !== "user" && dsr.subjectType !== "contact") {
-    return NextResponse.json(
-      { error: `subject_type '${dsr.subjectType}' has no erasure fulfillment logic` },
-      { status: 400 },
-    );
+    return apiError("VALIDATION_ERROR", `subject_type '${dsr.subjectType}' has no erasure fulfillment logic`, 400);
   }
 
   try {
@@ -47,14 +45,14 @@ export async function handlePreviewErasure(userId: string | null, id: string): P
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     if (message.includes("data subject request not found") || message.includes("contact not found")) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return apiError("NOT_FOUND", "Not found", 404);
     }
     if (message.includes("not an active org_admin")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      return apiError("FORBIDDEN", "Forbidden", 403);
     }
     if (message.includes("only supports")) {
-      return NextResponse.json({ error: message }, { status: 400 });
+      return apiError("VALIDATION_ERROR", message, 400);
     }
-    return NextResponse.json({ error: "Failed to preview erasure" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to preview erasure", 500);
   }
 }

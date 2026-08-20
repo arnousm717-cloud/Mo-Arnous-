@@ -8,6 +8,7 @@ import {
 import { withIdempotency } from "../../../../_shared/idempotency";
 import { resolveActor } from "../../../handlers";
 import { mapCrmError, toStageResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../../../_shared/api-error";
 
 /**
  * Milestone 2.2D.
@@ -52,7 +53,7 @@ export async function handleGetPipelineStage(
 
   const stage = await getPipelineStageById(actor, pipelineId, stageId);
   if (!stage) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toStageResponseBody(stage));
 }
@@ -76,7 +77,7 @@ export async function handleUpdatePipelineStage(
     try {
       const stage = await updatePipelineStage(actor, pipelineId, stageId, input);
       if (!stage) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toStageResponseBody(stage));
     } catch (err) {
@@ -84,7 +85,7 @@ export async function handleUpdatePipelineStage(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update pipeline stage" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update pipeline stage", 500);
     }
   }
 
@@ -96,7 +97,7 @@ export async function handleUpdatePipelineStage(
         try {
           const stage = await updatePipelineStage(actor, pipelineId, stageId, input, client);
           if (!stage) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toStageResponseBody(stage) };
         } catch (err) {
@@ -110,11 +111,11 @@ export async function handleUpdatePipelineStage(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update pipeline stage" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update pipeline stage", 500);
   }
 }
 
@@ -130,7 +131,7 @@ export async function handleDeletePipelineStage(
 
   const stage = await softDeletePipelineStage(actor, pipelineId, stageId);
   if (!stage) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toStageResponseBody(stage));
 }

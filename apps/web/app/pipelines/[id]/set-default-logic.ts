@@ -18,10 +18,10 @@ export async function setDefaultPipelineForResolvedContext(
   pipelineId: string,
 ): Promise<SetDefaultPipelineFormState> {
   const response = await handleSetDefaultPipeline(userId, pipelineId);
-  const data = (await response.json()) as { pipeline?: { id: string }; error?: string };
+  const data = (await response.json()) as { pipeline?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 200 && data.pipeline) {
     return { updatedId: data.pipeline.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to set this pipeline as default. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to set this pipeline as default. Please try again." };
 }

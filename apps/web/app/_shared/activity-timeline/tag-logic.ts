@@ -103,7 +103,7 @@ export async function attachExistingTagForResolvedContext(
   }
 
   const response = await handleCreateTagging(userId, { tagId, taggableType, taggableId });
-  const data = (await response.json()) as { tagging?: { id: string }; error?: string };
+  const data = (await response.json()) as { tagging?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 201 && data.tagging) {
     return {};
@@ -111,7 +111,7 @@ export async function attachExistingTagForResolvedContext(
   // DuplicateTaggingError/InvalidTagRelationshipError etc. already map to
   // a safe, human-readable message in handleCreateTagging — never a raw
   // DB error reaches this far.
-  return { error: typeof data.error === "string" ? data.error : "Failed to attach the tag. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to attach the tag. Please try again." };
 }
 
 export async function createAndAttachTagForResolvedContext(
@@ -126,18 +126,18 @@ export async function createAndAttachTagForResolvedContext(
   }
 
   const createRes = await handleCreateTag(userId, { name }, null);
-  const createData = (await createRes.json()) as { tag?: { id: string }; error?: string };
+  const createData = (await createRes.json()) as { tag?: { id: string }; error?: { code: string; message: string; request_id: string } };
   if (createRes.status !== 201 || !createData.tag) {
-    return { error: typeof createData.error === "string" ? createData.error : "Failed to create the tag." };
+    return { error: typeof createData.error === "object" && createData.error !== null ? createData.error.message : "Failed to create the tag." };
   }
 
   const taggingRes = await handleCreateTagging(userId, { tagId: createData.tag.id, taggableType, taggableId });
-  const taggingData = (await taggingRes.json()) as { tagging?: { id: string }; error?: string };
+  const taggingData = (await taggingRes.json()) as { tagging?: { id: string }; error?: { code: string; message: string; request_id: string } };
   if (taggingRes.status === 201 && taggingData.tagging) {
     return {};
   }
   return {
-    error: typeof taggingData.error === "string" ? taggingData.error : "Tag was created but could not be attached.",
+    error: typeof taggingData.error === "object" && taggingData.error !== null ? taggingData.error.message : "Tag was created but could not be attached.",
   };
 }
 
@@ -154,6 +154,6 @@ export async function removeTaggingForResolvedContext(
   if (response.status === 200) {
     return { removed: true };
   }
-  const data = (await response.json()) as { error?: string };
-  return { error: typeof data.error === "string" ? data.error : "Failed to remove the tag. Please try again." };
+  const data = (await response.json()) as { error?: { code: string; message: string; request_id: string } };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to remove the tag. Please try again." };
 }

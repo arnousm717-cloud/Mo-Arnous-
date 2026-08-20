@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { can, resolveAgencyContextForUser, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
+import { apiError } from "../_shared/api-error";
 import {
   createClientOrganizationForAgency,
   getOrganizationById,
@@ -38,7 +39,7 @@ const MAX_NAME_LENGTH = 200;
  */
 export async function handleGetOrganizations(userId: string | null): Promise<NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
 
   // Agency context takes precedence when present — an agency_owner/admin
@@ -88,7 +89,7 @@ export async function handleCreateOrganization(
   rawBody: unknown,
 ): Promise<NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
 
   const agencyContext = await resolveAgencyContextForUser(userId);
@@ -97,17 +98,17 @@ export async function handleCreateOrganization(
   // so TypeScript narrows agencyContext to non-null for the code below;
   // can() itself doesn't narrow, being just a boolean-returning function.
   if (!agencyContext || !can({ userId, ...agencyContext }, "organizations:create-client")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
 
   const body = rawBody as CreateOrganizationBody;
   const name = body?.name;
   if (typeof name !== "string" || !name.trim()) {
-    return NextResponse.json({ error: "name is required" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "name is required", 400);
   }
   const trimmedName = name.trim();
   if (trimmedName.length > MAX_NAME_LENGTH) {
-    return NextResponse.json({ error: `name must be ${MAX_NAME_LENGTH} characters or fewer` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `name must be ${MAX_NAME_LENGTH} characters or fewer`, 400);
   }
 
   try {
@@ -126,6 +127,6 @@ export async function handleCreateOrganization(
     // unexpected failure occurred — both are a clean 500 from the caller's
     // point of view, with detail available server-side via the platform's
     // own request logging, not in the response body.
-    return NextResponse.json({ error: "Failed to create organization" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to create organization", 500);
   }
 }

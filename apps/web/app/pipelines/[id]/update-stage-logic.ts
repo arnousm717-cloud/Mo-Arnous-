@@ -66,10 +66,10 @@ export async function updateStageForResolvedContext(
   const body = { name, sortOrder, probability, isWonStage, isLostStage };
 
   const response = await handleUpdatePipelineStage(userId, pipelineId, stageId, body, idempotencyKey);
-  const data = (await response.json()) as { stage?: { id: string }; error?: string };
+  const data = (await response.json()) as { stage?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 200 && data.stage) {
     return { updatedId: data.stage.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to update the stage. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to update the stage. Please try again." };
 }

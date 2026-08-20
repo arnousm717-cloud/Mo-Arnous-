@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { updatePipeline, getPipelineById, softDeletePipeline, CannotDeleteDefaultPipelineError, type UpdatePipelineInput } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toPipelineResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../_shared/api-error";
 
 /**
  * Milestone 2.2D. Cross-org and nonexistent :id are indistinguishable —
@@ -38,7 +39,7 @@ function extractUpdateInput(rawBody: unknown): UpdatePipelineInput {
  * (400) or a missing resource (404). */
 function mapDeleteError(err: unknown): { status: number; body: unknown } | null {
   if (err instanceof CannotDeleteDefaultPipelineError) {
-    return { status: 409, body: { error: err.message } };
+    return { status: 409, body: buildApiErrorBody("CONFLICT", err.message) };
   }
   return mapCrmError(err);
 }
@@ -51,7 +52,7 @@ export async function handleGetPipeline(userId: string | null, id: string): Prom
 
   const pipeline = await getPipelineById(actor, id);
   if (!pipeline) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toPipelineResponseBody(pipeline));
 }
@@ -74,7 +75,7 @@ export async function handleUpdatePipeline(
     try {
       const pipeline = await updatePipeline(actor, id, input);
       if (!pipeline) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toPipelineResponseBody(pipeline));
     } catch (err) {
@@ -82,7 +83,7 @@ export async function handleUpdatePipeline(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update pipeline" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update pipeline", 500);
     }
   }
 
@@ -94,7 +95,7 @@ export async function handleUpdatePipeline(
         try {
           const pipeline = await updatePipeline(actor, id, input, client);
           if (!pipeline) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toPipelineResponseBody(pipeline) };
         } catch (err) {
@@ -108,11 +109,11 @@ export async function handleUpdatePipeline(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update pipeline" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update pipeline", 500);
   }
 }
 
@@ -125,7 +126,7 @@ export async function handleDeletePipeline(userId: string | null, id: string): P
   try {
     const pipeline = await softDeletePipeline(actor, id);
     if (!pipeline) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return apiError("NOT_FOUND", "Not found", 404);
     }
     return NextResponse.json(toPipelineResponseBody(pipeline));
   } catch (err) {
@@ -133,6 +134,6 @@ export async function handleDeletePipeline(userId: string | null, id: string): P
     if (mapped) {
       return NextResponse.json(mapped.body, { status: mapped.status });
     }
-    return NextResponse.json({ error: "Failed to delete pipeline" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to delete pipeline", 500);
   }
 }

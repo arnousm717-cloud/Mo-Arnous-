@@ -9,6 +9,7 @@ import {
 import { withIdempotency } from "../../_shared/idempotency";
 import { isValidUuid } from "../../_shared/uuid";
 import { resolveActor, mapCrmError, toActivityResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../_shared/api-error";
 
 /**
  * Milestone 2.3D. Cross-org and nonexistent :id are indistinguishable —
@@ -48,12 +49,12 @@ export async function handleGetActivity(userId: string | null, id: string): Prom
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const activity = await getActivityById(actor, id);
   if (!activity) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toActivityResponseBody(activity));
 }
@@ -69,7 +70,7 @@ export async function handleUpdateActivity(
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -79,7 +80,7 @@ export async function handleUpdateActivity(
     try {
       const activity = await updateActivity(actor, id, input);
       if (!activity) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toActivityResponseBody(activity));
     } catch (err) {
@@ -87,7 +88,7 @@ export async function handleUpdateActivity(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update activity" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update activity", 500);
     }
   }
 
@@ -99,7 +100,7 @@ export async function handleUpdateActivity(
         try {
           const activity = await updateActivity(actor, id, input, client);
           if (!activity) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toActivityResponseBody(activity) };
         } catch (err) {
@@ -113,11 +114,11 @@ export async function handleUpdateActivity(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update activity" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update activity", 500);
   }
 }
 
@@ -127,12 +128,12 @@ export async function handleDeleteActivity(userId: string | null, id: string): P
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const activity = await softDeleteActivity(actor, id);
   if (!activity) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toActivityResponseBody(activity));
 }

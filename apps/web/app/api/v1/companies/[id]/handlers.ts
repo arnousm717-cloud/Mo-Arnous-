@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { updateCompany, getCompanyById, softDeleteCompany, type UpdateCompanyInput } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toCompanyResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../_shared/api-error";
 
 /**
  * Milestone 2.1F-B. Cross-org and nonexistent :id are indistinguishable —
@@ -39,7 +40,7 @@ export async function handleGetCompany(userId: string | null, id: string): Promi
 
   const company = await getCompanyById(actor, id);
   if (!company) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toCompanyResponseBody(company));
 }
@@ -62,7 +63,7 @@ export async function handleUpdateCompany(
     try {
       const company = await updateCompany(actor, id, input);
       if (!company) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toCompanyResponseBody(company));
     } catch (err) {
@@ -70,7 +71,7 @@ export async function handleUpdateCompany(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update company" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update company", 500);
     }
   }
 
@@ -82,7 +83,7 @@ export async function handleUpdateCompany(
         try {
           const company = await updateCompany(actor, id, input, client);
           if (!company) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toCompanyResponseBody(company) };
         } catch (err) {
@@ -96,11 +97,11 @@ export async function handleUpdateCompany(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update company" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update company", 500);
   }
 }
 
@@ -112,7 +113,7 @@ export async function handleDeleteCompany(userId: string | null, id: string): Pr
 
   const company = await softDeleteCompany(actor, id);
   if (!company) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toCompanyResponseBody(company));
 }

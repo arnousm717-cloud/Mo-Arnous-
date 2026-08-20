@@ -45,10 +45,10 @@ export async function createPipelineForResolvedContext(
   const isDefault = formData.get("isDefault") === "on";
 
   const response = await handleCreatePipeline(userId, { name, ...(isDefault ? { isDefault: true } : {}) }, idempotencyKey);
-  const data = (await response.json()) as { pipeline?: { id: string }; error?: string };
+  const data = (await response.json()) as { pipeline?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 201 && data.pipeline) {
     return { createdId: data.pipeline.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to create the pipeline. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to create the pipeline. Please try again." };
 }

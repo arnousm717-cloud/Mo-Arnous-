@@ -1,8 +1,9 @@
-import { NextResponse, type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { getAuthenticatedUser } from "@ai-revenue-os/auth";
 import { withRequestLogging } from "../../../../_shared/logger";
 import { isSameOrigin } from "../../../../_shared/same-origin";
 import { handleGetPipelineStage, handleUpdatePipelineStage, handleDeletePipelineStage } from "./handlers";
+import { apiError } from "../../../../_shared/api-error";
 
 export const GET = withRequestLogging(
   "GET",
@@ -19,7 +20,7 @@ export const PATCH = withRequestLogging(
   "/api/v1/pipelines/[id]/stages/[stageId]",
   async (request: NextRequest, { params }: { params: Promise<{ id: string; stageId: string }> }) => {
     if (!isSameOrigin(request.headers.get("origin"), request.url)) {
-      return NextResponse.json({ error: "Invalid origin" }, { status: 403 });
+      return apiError("FORBIDDEN", "Invalid origin", 403);
     }
 
     const { id, stageId } = await params;
@@ -29,7 +30,7 @@ export const PATCH = withRequestLogging(
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      return apiError("VALIDATION_ERROR", "Invalid JSON body", 400);
     }
 
     return handleUpdatePipelineStage(user?.id ?? null, id, stageId, body, request.headers.get("Idempotency-Key"));
@@ -41,7 +42,7 @@ export const DELETE = withRequestLogging(
   "/api/v1/pipelines/[id]/stages/[stageId]",
   async (request: NextRequest, { params }: { params: Promise<{ id: string; stageId: string }> }) => {
     if (!isSameOrigin(request.headers.get("origin"), request.url)) {
-      return NextResponse.json({ error: "Invalid origin" }, { status: 403 });
+      return apiError("FORBIDDEN", "Invalid origin", 403);
     }
 
     const { id, stageId } = await params;

@@ -13,6 +13,7 @@ import {
 } from "@ai-revenue-os/crm";
 import { isValidUuid } from "../_shared/uuid";
 import { resolveActor } from "../tags/handlers";
+import { apiError, buildApiErrorBody } from "../_shared/api-error";
 
 /**
  * Milestone 2.3D. Taggings has no permission keys of its own — every
@@ -36,7 +37,7 @@ const TAGGABLE_TYPES = ["company", "contact", "deal"];
 
 function mapTaggingCrmError(err: unknown): { status: number; body: unknown } | null {
   if (err instanceof DuplicateTaggingError) {
-    return { status: 409, body: { error: err.message } };
+    return { status: 409, body: buildApiErrorBody("CONFLICT", err.message) };
   }
   if (
     err instanceof ValidationError ||
@@ -45,7 +46,7 @@ function mapTaggingCrmError(err: unknown): { status: number; body: unknown } | n
     err instanceof InvalidContactRelationshipError ||
     err instanceof InvalidDealRelationshipError
   ) {
-    return { status: 400, body: { error: err.message } };
+    return { status: 400, body: buildApiErrorBody("VALIDATION_ERROR", err.message) };
   }
   return null;
 }
@@ -84,13 +85,13 @@ export async function handleListTaggings(userId: string | null, url: URL): Promi
   const taggableId = url.searchParams.get("taggableId");
 
   if (tagId !== null && !isValidUuid(tagId)) {
-    return NextResponse.json({ error: "tagId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "tagId must be a valid UUID", 400);
   }
   if (taggableType !== null && !TAGGABLE_TYPES.includes(taggableType)) {
-    return NextResponse.json({ error: `taggableType must be one of ${TAGGABLE_TYPES.join(", ")}` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `taggableType must be one of ${TAGGABLE_TYPES.join(", ")}`, 400);
   }
   if (taggableId !== null && !isValidUuid(taggableId)) {
-    return NextResponse.json({ error: "taggableId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "taggableId must be a valid UUID", 400);
   }
 
   try {
@@ -104,9 +105,9 @@ export async function handleListTaggings(userId: string | null, url: URL): Promi
     return NextResponse.json({ taggings: page.items, nextCursor: page.nextCursor });
   } catch (err) {
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message }, { status: 400 });
+      return apiError("VALIDATION_ERROR", err.message, 400);
     }
-    return NextResponse.json({ error: "Failed to list taggings" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to list taggings", 500);
   }
 }
 
@@ -118,10 +119,10 @@ export async function handleCreateTagging(userId: string | null, rawBody: unknow
 
   const input = extractCreateInput(rawBody);
   if (input.tagId !== undefined && input.tagId !== null && !isValidUuid(input.tagId)) {
-    return NextResponse.json({ error: "tagId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "tagId must be a valid UUID", 400);
   }
   if (input.taggableId !== undefined && input.taggableId !== null && !isValidUuid(input.taggableId)) {
-    return NextResponse.json({ error: "taggableId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "taggableId must be a valid UUID", 400);
   }
 
   try {
@@ -132,7 +133,7 @@ export async function handleCreateTagging(userId: string | null, rawBody: unknow
     if (mapped) {
       return NextResponse.json(mapped.body, { status: mapped.status });
     }
-    return NextResponse.json({ error: "Failed to create tagging" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to create tagging", 500);
   }
 }
 

@@ -12,6 +12,7 @@ import {
 } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../_shared/idempotency";
 import { isValidUuid } from "../_shared/uuid";
+import { apiError, buildApiErrorBody } from "../_shared/api-error";
 
 /**
  * Milestone 2.3D. Mirrors deals/handlers.ts exactly — see its own comment
@@ -33,12 +34,12 @@ async function resolveActor(
   permission: PermissionKey,
 ): Promise<ResolvedActor | NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
   const orgContext = await resolveOrganizationContextForUser(userId);
   const actor: Actor | null = orgContext ? { userId, ...orgContext } : null;
   if (!actor || !can(actor, permission)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
   return { userId, organizationId: orgContext!.organizationId, roleKey: orgContext!.roleKey };
 }
@@ -58,7 +59,7 @@ function mapCrmError(err: unknown): { status: number; body: unknown } | null {
     err instanceof InvalidContactRelationshipError ||
     err instanceof InvalidDealRelationshipError
   ) {
-    return { status: 400, body: { error: err.message } };
+    return { status: 400, body: buildApiErrorBody("VALIDATION_ERROR", err.message) };
   }
   return null;
 }
@@ -116,21 +117,21 @@ export async function handleListActivities(userId: string | null, url: URL): Pro
   const completedParam = url.searchParams.get("completed");
 
   if (relatedToType !== null && !RELATED_TO_TYPES.includes(relatedToType)) {
-    return NextResponse.json({ error: `relatedToType must be one of ${RELATED_TO_TYPES.join(", ")}` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `relatedToType must be one of ${RELATED_TO_TYPES.join(", ")}`, 400);
   }
   if (relatedToId !== null && !isValidUuid(relatedToId)) {
-    return NextResponse.json({ error: "relatedToId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "relatedToId must be a valid UUID", 400);
   }
   if (type !== null && !ACTIVITY_TYPES.includes(type)) {
-    return NextResponse.json({ error: `type must be one of ${ACTIVITY_TYPES.join(", ")}` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `type must be one of ${ACTIVITY_TYPES.join(", ")}`, 400);
   }
   if (createdBy !== null && !isValidUuid(createdBy)) {
-    return NextResponse.json({ error: "createdBy must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "createdBy must be a valid UUID", 400);
   }
   let completed: boolean | undefined;
   if (completedParam !== null) {
     if (completedParam !== "true" && completedParam !== "false") {
-      return NextResponse.json({ error: "completed must be 'true' or 'false'" }, { status: 400 });
+      return apiError("VALIDATION_ERROR", "completed must be 'true' or 'false'", 400);
     }
     completed = completedParam === "true";
   }
@@ -148,9 +149,9 @@ export async function handleListActivities(userId: string | null, url: URL): Pro
     return NextResponse.json({ activities: page.items, nextCursor: page.nextCursor });
   } catch (err) {
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message }, { status: 400 });
+      return apiError("VALIDATION_ERROR", err.message, 400);
     }
-    return NextResponse.json({ error: "Failed to list activities" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to list activities", 500);
   }
 }
 
@@ -166,7 +167,7 @@ export async function handleCreateActivity(
 
   const input = extractCreateInput(rawBody);
   if (input.relatedToId !== undefined && input.relatedToId !== null && !isValidUuid(input.relatedToId)) {
-    return NextResponse.json({ error: "relatedToId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "relatedToId must be a valid UUID", 400);
   }
 
   if (!idempotencyKey) {
@@ -178,7 +179,7 @@ export async function handleCreateActivity(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to create activity" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to create activity", 500);
     }
   }
 
@@ -201,11 +202,11 @@ export async function handleCreateActivity(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to create activity" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to create activity", 500);
   }
 }
 

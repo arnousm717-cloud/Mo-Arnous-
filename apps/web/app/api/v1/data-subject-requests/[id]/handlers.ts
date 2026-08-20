@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { can, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
 import { getDataSubjectRequestById } from "@ai-revenue-os/compliance";
+import { apiError } from "../../_shared/api-error";
 
 export async function handleGetDataSubjectRequest(userId: string | null, id: string): Promise<NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
 
   const orgContext = await resolveOrganizationContextForUser(userId);
   if (!orgContext || !can({ userId, ...orgContext }, "data-subject-requests:read")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
 
   const dataSubjectRequest = await getDataSubjectRequestById(
@@ -17,7 +18,7 @@ export async function handleGetDataSubjectRequest(userId: string | null, id: str
     id,
   );
   if (!dataSubjectRequest) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   return NextResponse.json({ dataSubjectRequest });

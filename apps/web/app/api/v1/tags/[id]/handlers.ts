@@ -3,6 +3,7 @@ import { updateTag, getTagById, softDeleteTag, type UpdateTagInput } from "@ai-r
 import { withIdempotency } from "../../_shared/idempotency";
 import { isValidUuid } from "../../_shared/uuid";
 import { resolveActor, mapCrmError, toTagResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../_shared/api-error";
 
 /**
  * Milestone 2.3D. Mirrors activities/[id]/handlers.ts exactly — see its
@@ -25,12 +26,12 @@ export async function handleGetTag(userId: string | null, id: string): Promise<N
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const tag = await getTagById(actor, id);
   if (!tag) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toTagResponseBody(tag));
 }
@@ -46,7 +47,7 @@ export async function handleUpdateTag(
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -56,7 +57,7 @@ export async function handleUpdateTag(
     try {
       const tag = await updateTag(actor, id, input);
       if (!tag) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toTagResponseBody(tag));
     } catch (err) {
@@ -64,7 +65,7 @@ export async function handleUpdateTag(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update tag" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update tag", 500);
     }
   }
 
@@ -76,7 +77,7 @@ export async function handleUpdateTag(
         try {
           const tag = await updateTag(actor, id, input, client);
           if (!tag) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toTagResponseBody(tag) };
         } catch (err) {
@@ -90,11 +91,11 @@ export async function handleUpdateTag(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update tag" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update tag", 500);
   }
 }
 
@@ -104,12 +105,12 @@ export async function handleDeleteTag(userId: string | null, id: string): Promis
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const tag = await softDeleteTag(actor, id);
   if (!tag) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toTagResponseBody(tag));
 }

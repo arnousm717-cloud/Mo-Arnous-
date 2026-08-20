@@ -89,7 +89,7 @@ export default async function DealsBoardPage({
 
   const dealsUrl = new URL(`http://internal/deals?pipelineId=${selectedPipeline.id}&limit=100`);
   const dealsResponse = await handleListDeals(userId, dealsUrl);
-  const dealsData = (await dealsResponse.json()) as { deals?: DealRow[]; error?: string };
+  const dealsData = (await dealsResponse.json()) as { deals?: DealRow[]; error?: { code: string; message: string; request_id: string } };
   const deals = dealsData.deals ?? [];
 
   const [companyOptions, contactOptions] = await Promise.all([
@@ -187,7 +187,7 @@ export default async function DealsBoardPage({
       <PipelineBoard
         stages={columns}
         state={boardState}
-        errorMessage={typeof dealsData.error === "string" ? dealsData.error : "Failed to load the board."}
+        errorMessage={typeof dealsData.error === "object" && dealsData.error !== null ? dealsData.error.message : "Failed to load the board."}
         emptyMessage="This pipeline has no active stages yet."
       />
     </main>

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { updateDeal, getDealById, softDeleteDeal, type UpdateDealInput } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toDealResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../_shared/api-error";
 
 /**
  * Milestone 2.2D. Cross-org and nonexistent :id are indistinguishable —
@@ -42,7 +43,7 @@ export async function handleGetDeal(userId: string | null, id: string): Promise<
 
   const deal = await getDealById(actor, id);
   if (!deal) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toDealResponseBody(deal));
 }
@@ -65,7 +66,7 @@ export async function handleUpdateDeal(
     try {
       const deal = await updateDeal(actor, id, input);
       if (!deal) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toDealResponseBody(deal));
     } catch (err) {
@@ -73,7 +74,7 @@ export async function handleUpdateDeal(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update deal" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update deal", 500);
     }
   }
 
@@ -85,7 +86,7 @@ export async function handleUpdateDeal(
         try {
           const deal = await updateDeal(actor, id, input, client);
           if (!deal) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toDealResponseBody(deal) };
         } catch (err) {
@@ -99,11 +100,11 @@ export async function handleUpdateDeal(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update deal" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update deal", 500);
   }
 }
 
@@ -115,7 +116,7 @@ export async function handleDeleteDeal(userId: string | null, id: string): Promi
 
   const deal = await softDeleteDeal(actor, id);
   if (!deal) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toDealResponseBody(deal));
 }

@@ -102,7 +102,11 @@ describe("pipelines API: tenancy", () => {
     const missingGet = await handleGetPipeline(orgA.userId, nonexistentId);
     expect(crossGet.status).toBe(404);
     expect(missingGet.status).toBe(404);
-    expect(await crossGet.json()).toEqual(await missingGet.json());
+    const crossGetBody = await crossGet.json();
+    const missingGetBody = await missingGet.json();
+    expect(crossGetBody.error.code).toBe(missingGetBody.error.code);
+    expect(crossGetBody.error.message).toBe(missingGetBody.error.message);
+    expect(crossGetBody.error.request_id).not.toBe(missingGetBody.error.request_id);
 
     expect((await handleUpdatePipeline(orgA.userId, pipelineB, { name: "Pwned" }, null)).status).toBe(404);
     expect((await handleDeletePipeline(orgA.userId, pipelineB)).status).toBe(404);

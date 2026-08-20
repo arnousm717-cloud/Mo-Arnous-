@@ -46,7 +46,7 @@ export default async function PipelinesPage({
   const url = new URL(`http://internal/pipelines?${params.toString()}`);
 
   const response = await handleListPipelines(userId, url);
-  const data = (await response.json()) as { pipelines?: PipelineRow[]; nextCursor?: string | null; error?: string };
+  const data = (await response.json()) as { pipelines?: PipelineRow[]; nextCursor?: string | null; error?: { code: string; message: string; request_id: string } };
   const rows = data.pipelines ?? [];
 
   const actor = { userId, organizationId, roleKey };
@@ -95,7 +95,7 @@ export default async function PipelinesPage({
           getRowId={(row) => row.id}
           state={tableState}
           emptyMessage="No pipelines yet."
-          errorMessage={typeof data.error === "string" ? data.error : "Failed to load pipelines."}
+          errorMessage={typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to load pipelines."}
         />
 
         {data.nextCursor ? (

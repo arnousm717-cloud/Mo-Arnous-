@@ -21,6 +21,6 @@ export async function deleteCompanyForResolvedContext(
   if (response.status === 200) {
     return { deleted: true };
   }
-  const data = (await response.json()) as { error?: string };
-  return { error: typeof data.error === "string" ? data.error : "Failed to remove the company. Please try again." };
+  const data = (await response.json()) as { error?: { code: string; message: string; request_id: string } };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to remove the company. Please try again." };
 }

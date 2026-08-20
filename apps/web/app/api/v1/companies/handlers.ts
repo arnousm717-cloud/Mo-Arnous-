@@ -9,6 +9,7 @@ import {
   type CreateCompanyInput,
 } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../_shared/idempotency";
+import { apiError, buildApiErrorBody } from "../_shared/api-error";
 
 /**
  * Milestone 2.1F-B. Mirrors the existing organizations/data-subject-requests
@@ -37,12 +38,12 @@ async function resolveActor(
   permission: PermissionKey,
 ): Promise<ResolvedActor | NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
   const orgContext = await resolveOrganizationContextForUser(userId);
   const actor: Actor | null = orgContext ? { userId, ...orgContext } : null;
   if (!actor || !can(actor, permission)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
   return { userId, organizationId: orgContext!.organizationId, roleKey: orgContext!.roleKey };
 }
@@ -52,7 +53,7 @@ async function resolveActor(
  * the caller must let propagate (never swallow into a persisted 500). */
 function mapCrmError(err: unknown): { status: number; body: unknown } | null {
   if (err instanceof ValidationError || err instanceof InvalidOwnerError) {
-    return { status: 400, body: { error: err.message } };
+    return { status: 400, body: buildApiErrorBody("VALIDATION_ERROR", err.message) };
   }
   return null;
 }
@@ -115,9 +116,9 @@ export async function handleListCompanies(userId: string | null, url: URL): Prom
     return NextResponse.json({ companies: page.items, nextCursor: page.nextCursor });
   } catch (err) {
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message }, { status: 400 });
+      return apiError("VALIDATION_ERROR", err.message, 400);
     }
-    return NextResponse.json({ error: "Failed to list companies" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to list companies", 500);
   }
 }
 
@@ -142,7 +143,7 @@ export async function handleCreateCompany(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to create company" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to create company", 500);
     }
   }
 
@@ -165,14 +166,14 @@ export async function handleCreateCompany(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
     // The idempotency transaction rolled back (an unexpected failure inside
     // the callback, or in the reservation machinery itself) — never forward
     // raw error detail to the client.
-    return NextResponse.json({ error: "Failed to create company" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to create company", 500);
   }
 }
 

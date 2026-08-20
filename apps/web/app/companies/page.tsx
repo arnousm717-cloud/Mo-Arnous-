@@ -56,7 +56,7 @@ export default async function CompaniesPage({
   const url = new URL(`http://internal/companies?${params.toString()}`);
 
   const response = await handleListCompanies(userId, url);
-  const data = (await response.json()) as { companies?: CompanyRow[]; nextCursor?: string | null; error?: string };
+  const data = (await response.json()) as { companies?: CompanyRow[]; nextCursor?: string | null; error?: { code: string; message: string; request_id: string } };
 
   const canCreate = can({ userId, organizationId, roleKey }, "companies:create");
   const ownerOptions = await listActiveOwnerOptions({ userId, organizationId, roleKey });
@@ -108,7 +108,7 @@ export default async function CompaniesPage({
           getRowId={(row) => row.id}
           state={tableState}
           emptyMessage="No companies yet."
-          errorMessage={typeof data.error === "string" ? data.error : "Failed to load companies."}
+          errorMessage={typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to load companies."}
         />
 
         {data.nextCursor ? (

@@ -55,7 +55,7 @@ export default async function ContactsPage({
   const url = new URL(`http://internal/contacts?${params.toString()}`);
 
   const response = await handleListContacts(userId, url);
-  const data = (await response.json()) as { contacts?: ContactRow[]; nextCursor?: string | null; error?: string };
+  const data = (await response.json()) as { contacts?: ContactRow[]; nextCursor?: string | null; error?: { code: string; message: string; request_id: string } };
 
   const actor = { userId, organizationId, roleKey };
   const canCreate = can(actor, "contacts:create");
@@ -168,7 +168,7 @@ export default async function ContactsPage({
           getRowId={(row) => row.id}
           state={tableState}
           emptyMessage="No contacts yet."
-          errorMessage={typeof data.error === "string" ? data.error : "Failed to load contacts."}
+          errorMessage={typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to load contacts."}
         />
 
         {data.nextCursor ? (

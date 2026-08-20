@@ -12,6 +12,7 @@ import {
 } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../_shared/idempotency";
 import { isValidUuid } from "../_shared/uuid";
+import { apiError, buildApiErrorBody } from "../_shared/api-error";
 
 /**
  * Milestone 2.3D. Mirrors activities/handlers.ts (and, through it,
@@ -32,12 +33,12 @@ async function resolveActor(
   permission: PermissionKey,
 ): Promise<ResolvedActor | NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
   const orgContext = await resolveOrganizationContextForUser(userId);
   const actor: Actor | null = orgContext ? { userId, ...orgContext } : null;
   if (!actor || !can(actor, permission)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
   return { userId, organizationId: orgContext!.organizationId, roleKey: orgContext!.roleKey };
 }
@@ -49,7 +50,7 @@ function mapCrmError(err: unknown): { status: number; body: unknown } | null {
     err instanceof InvalidContactRelationshipError ||
     err instanceof InvalidDealRelationshipError
   ) {
-    return { status: 400, body: { error: err.message } };
+    return { status: 400, body: buildApiErrorBody("VALIDATION_ERROR", err.message) };
   }
   return null;
 }
@@ -93,10 +94,10 @@ export async function handleListNotes(userId: string | null, url: URL): Promise<
   const relatedToId = url.searchParams.get("relatedToId");
 
   if (relatedToType !== null && !RELATED_TO_TYPES.includes(relatedToType)) {
-    return NextResponse.json({ error: `relatedToType must be one of ${RELATED_TO_TYPES.join(", ")}` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `relatedToType must be one of ${RELATED_TO_TYPES.join(", ")}`, 400);
   }
   if (relatedToId !== null && !isValidUuid(relatedToId)) {
-    return NextResponse.json({ error: "relatedToId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "relatedToId must be a valid UUID", 400);
   }
 
   try {
@@ -109,9 +110,9 @@ export async function handleListNotes(userId: string | null, url: URL): Promise<
     return NextResponse.json({ notes: page.items, nextCursor: page.nextCursor });
   } catch (err) {
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message }, { status: 400 });
+      return apiError("VALIDATION_ERROR", err.message, 400);
     }
-    return NextResponse.json({ error: "Failed to list notes" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to list notes", 500);
   }
 }
 
@@ -127,7 +128,7 @@ export async function handleCreateNote(
 
   const input = extractCreateInput(rawBody);
   if (input.relatedToId !== undefined && input.relatedToId !== null && !isValidUuid(input.relatedToId)) {
-    return NextResponse.json({ error: "relatedToId must be a valid UUID" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "relatedToId must be a valid UUID", 400);
   }
 
   if (!idempotencyKey) {
@@ -139,7 +140,7 @@ export async function handleCreateNote(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to create note" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to create note", 500);
     }
   }
 
@@ -162,11 +163,11 @@ export async function handleCreateNote(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to create note" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to create note", 500);
   }
 }
 

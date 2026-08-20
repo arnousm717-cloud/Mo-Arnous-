@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { can, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
 import { recordConsent, type ConsentStatus, type ConsentSubjectType, type ConsentType } from "@ai-revenue-os/compliance";
+import { apiError } from "../_shared/api-error";
 
 /**
  * Kept out of route.ts deliberately — same reasoning as every other
@@ -36,7 +37,7 @@ function isNonEmptyString(value: unknown): value is string {
  */
 export async function handleRecordConsent(userId: string | null, rawBody: unknown): Promise<NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
 
   const orgContext = await resolveOrganizationContextForUser(userId);
@@ -45,25 +46,25 @@ export async function handleRecordConsent(userId: string | null, rawBody: unknow
   // to non-null for the code below, same pattern as
   // organizations/handlers.ts's handleCreateOrganization.
   if (!orgContext || !can({ userId, ...orgContext }, "consent:record")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
 
   const body = rawBody as RecordConsentBody;
   if (!isNonEmptyString(body?.subjectType) || !SUBJECT_TYPES.includes(body.subjectType as ConsentSubjectType)) {
-    return NextResponse.json({ error: `subjectType must be one of: ${SUBJECT_TYPES.join(", ")}` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `subjectType must be one of: ${SUBJECT_TYPES.join(", ")}`, 400);
   }
   if (!isNonEmptyString(body?.subjectId)) {
-    return NextResponse.json({ error: "subjectId is required" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "subjectId is required", 400);
   }
   if (!isNonEmptyString(body?.consentType) || !CONSENT_TYPES.includes(body.consentType as ConsentType)) {
-    return NextResponse.json({ error: `consentType must be one of: ${CONSENT_TYPES.join(", ")}` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `consentType must be one of: ${CONSENT_TYPES.join(", ")}`, 400);
   }
   if (!isNonEmptyString(body?.status) || !STATUSES.includes(body.status as ConsentStatus)) {
-    return NextResponse.json({ error: `status must be one of: ${STATUSES.join(", ")}` }, { status: 400 });
+    return apiError("VALIDATION_ERROR", `status must be one of: ${STATUSES.join(", ")}`, 400);
   }
   const source = body.source;
   if (source !== undefined && typeof source !== "string") {
-    return NextResponse.json({ error: "source must be a string when provided" }, { status: 400 });
+    return apiError("VALIDATION_ERROR", "source must be a string when provided", 400);
   }
 
   try {
@@ -81,6 +82,6 @@ export async function handleRecordConsent(userId: string | null, rawBody: unknow
   } catch {
     // Never forward raw DB/driver error text to the client — same
     // discipline as handleCreateOrganization.
-    return NextResponse.json({ error: "Failed to record consent" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to record consent", 500);
   }
 }

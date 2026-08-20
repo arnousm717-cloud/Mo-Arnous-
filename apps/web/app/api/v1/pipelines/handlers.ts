@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { can, resolveOrganizationContextForUser, type Actor, type PermissionKey } from "@ai-revenue-os/auth";
 import { createPipeline, listPipelines, ValidationError, type Pipeline, type CreatePipelineInput } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../_shared/idempotency";
+import { apiError, buildApiErrorBody } from "../_shared/api-error";
 
 /**
  * Milestone 2.2D. Mirrors companies/handlers.ts exactly — see its own
@@ -19,19 +20,19 @@ async function resolveActor(
   permission: PermissionKey,
 ): Promise<ResolvedActor | NextResponse> {
   if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
   const orgContext = await resolveOrganizationContextForUser(userId);
   const actor: Actor | null = orgContext ? { userId, ...orgContext } : null;
   if (!actor || !can(actor, permission)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return apiError("FORBIDDEN", "Forbidden", 403);
   }
   return { userId, organizationId: orgContext!.organizationId, roleKey: orgContext!.roleKey };
 }
 
 function mapCrmError(err: unknown): { status: number; body: unknown } | null {
   if (err instanceof ValidationError) {
-    return { status: 400, body: { error: err.message } };
+    return { status: 400, body: buildApiErrorBody("VALIDATION_ERROR", err.message) };
   }
   return null;
 }
@@ -82,9 +83,9 @@ export async function handleListPipelines(userId: string | null, url: URL): Prom
     return NextResponse.json({ pipelines: page.items, nextCursor: page.nextCursor });
   } catch (err) {
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message }, { status: 400 });
+      return apiError("VALIDATION_ERROR", err.message, 400);
     }
-    return NextResponse.json({ error: "Failed to list pipelines" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to list pipelines", 500);
   }
 }
 
@@ -109,7 +110,7 @@ export async function handleCreatePipeline(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to create pipeline" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to create pipeline", 500);
     }
   }
 
@@ -132,11 +133,11 @@ export async function handleCreatePipeline(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to create pipeline" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to create pipeline", 500);
   }
 }
 

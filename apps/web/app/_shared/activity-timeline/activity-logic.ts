@@ -61,12 +61,12 @@ export async function createActivityForResolvedContext(
   };
 
   const response = await handleCreateActivity(userId, body, idempotencyKey);
-  const data = (await response.json()) as { activity?: { id: string }; error?: string };
+  const data = (await response.json()) as { activity?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 201 && data.activity) {
     return {};
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to create the activity. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to create the activity. Please try again." };
 }
 
 export async function updateActivityForResolvedContext(
@@ -91,12 +91,12 @@ export async function updateActivityForResolvedContext(
   };
 
   const response = await handleUpdateActivity(userId, activityId, body, idempotencyKey);
-  const data = (await response.json()) as { activity?: { id: string }; error?: string };
+  const data = (await response.json()) as { activity?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 200 && data.activity) {
     return {};
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to update the activity. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to update the activity. Please try again." };
 }
 
 export interface DeleteActivityFormState {
@@ -112,6 +112,6 @@ export async function deleteActivityForResolvedContext(
   if (response.status === 200) {
     return { deleted: true };
   }
-  const data = (await response.json()) as { error?: string };
-  return { error: typeof data.error === "string" ? data.error : "Failed to remove the activity. Please try again." };
+  const data = (await response.json()) as { error?: { code: string; message: string; request_id: string } };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to remove the activity. Please try again." };
 }

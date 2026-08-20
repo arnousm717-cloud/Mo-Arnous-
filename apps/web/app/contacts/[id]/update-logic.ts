@@ -64,10 +64,10 @@ export async function updateContactForResolvedContext(
   };
 
   const response = await handleUpdateContact(userId, contactId, body, idempotencyKey);
-  const data = (await response.json()) as { contact?: { id: string }; error?: string };
+  const data = (await response.json()) as { contact?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 200 && data.contact) {
     return { updatedId: data.contact.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to update the contact. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to update the contact. Please try again." };
 }

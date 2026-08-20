@@ -10,6 +10,7 @@ import {
 } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../../../_shared/idempotency";
 import { resolveActor } from "../../handlers";
+import { apiError, buildApiErrorBody } from "../../../_shared/api-error";
 
 /**
  * Milestone 2.2D. Nested resource — pipeline_stages has no permission
@@ -37,10 +38,10 @@ function mapCrmError(err: unknown): { status: number; body: unknown } | null {
   // deals/handlers.ts, where pipelineId is a body field and the identical
   // error class maps to 400 there).
   if (err instanceof InvalidPipelineRelationshipError) {
-    return { status: 404, body: { error: "Not found" } };
+    return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
   }
   if (err instanceof ValidationError) {
-    return { status: 400, body: { error: err.message } };
+    return { status: 400, body: buildApiErrorBody("VALIDATION_ERROR", err.message) };
   }
   return null;
 }
@@ -87,7 +88,7 @@ export async function handleListPipelineStages(userId: string | null, pipelineId
 
   const pipeline = await getPipelineById(actor, pipelineId);
   if (!pipeline) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const stages = await listPipelineStages(actor, pipelineId);
@@ -117,7 +118,7 @@ export async function handleCreatePipelineStage(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to create pipeline stage" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to create pipeline stage", 500);
     }
   }
 
@@ -140,11 +141,11 @@ export async function handleCreatePipelineStage(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to create pipeline stage" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to create pipeline stage", 500);
   }
 }
 

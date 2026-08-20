@@ -105,7 +105,11 @@ describe("companies API: tenancy", () => {
     const missingGet = await handleGetCompany(orgA.userId, nonexistentId);
     expect(crossGet.status).toBe(404);
     expect(missingGet.status).toBe(404);
-    expect(await crossGet.json()).toEqual(await missingGet.json());
+    const crossGetBody = await crossGet.json();
+    const missingGetBody = await missingGet.json();
+    expect(crossGetBody.error.code).toBe(missingGetBody.error.code);
+    expect(crossGetBody.error.message).toBe(missingGetBody.error.message);
+    expect(crossGetBody.error.request_id).not.toBe(missingGetBody.error.request_id);
 
     expect((await handleUpdateCompany(orgA.userId, companyB, { name: "Pwned" }, null)).status).toBe(404);
     expect((await handleDeleteCompany(orgA.userId, companyB)).status).toBe(404);

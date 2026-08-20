@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { updateContact, getContactById, softDeleteContact, type UpdateContactInput } from "@ai-revenue-os/crm";
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toContactResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../_shared/api-error";
 
 /** Milestone 2.1F-B. Mirrors companies/[id]/handlers.ts exactly. */
 
@@ -30,7 +31,7 @@ export async function handleGetContact(userId: string | null, id: string): Promi
 
   const contact = await getContactById(actor, id);
   if (!contact) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toContactResponseBody(contact));
 }
@@ -53,7 +54,7 @@ export async function handleUpdateContact(
     try {
       const contact = await updateContact(actor, id, input);
       if (!contact) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toContactResponseBody(contact));
     } catch (err) {
@@ -61,7 +62,7 @@ export async function handleUpdateContact(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update contact" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update contact", 500);
     }
   }
 
@@ -73,7 +74,7 @@ export async function handleUpdateContact(
         try {
           const contact = await updateContact(actor, id, input, client);
           if (!contact) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toContactResponseBody(contact) };
         } catch (err) {
@@ -87,11 +88,11 @@ export async function handleUpdateContact(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update contact" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update contact", 500);
   }
 }
 
@@ -103,7 +104,7 @@ export async function handleDeleteContact(userId: string | null, id: string): Pr
 
   const contact = await softDeleteContact(actor, id);
   if (!contact) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toContactResponseBody(contact));
 }

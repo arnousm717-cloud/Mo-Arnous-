@@ -74,10 +74,10 @@ export async function createStageForResolvedContext(
   };
 
   const response = await handleCreatePipelineStage(userId, pipelineId, body, idempotencyKey);
-  const data = (await response.json()) as { stage?: { id: string }; error?: string };
+  const data = (await response.json()) as { stage?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 201 && data.stage) {
     return { createdId: data.stage.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to create the stage. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to create the stage. Please try again." };
 }

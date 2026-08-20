@@ -3,6 +3,7 @@ import { updateNote, getNoteById, softDeleteNote, type UpdateNoteInput } from "@
 import { withIdempotency } from "../../_shared/idempotency";
 import { isValidUuid } from "../../_shared/uuid";
 import { resolveActor, mapCrmError, toNoteResponseBody } from "../handlers";
+import { apiError, buildApiErrorBody } from "../../_shared/api-error";
 
 /**
  * Milestone 2.3D. Mirrors activities/[id]/handlers.ts exactly — see its
@@ -22,12 +23,12 @@ export async function handleGetNote(userId: string | null, id: string): Promise<
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const note = await getNoteById(actor, id);
   if (!note) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toNoteResponseBody(note));
 }
@@ -43,7 +44,7 @@ export async function handleUpdateNote(
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -53,7 +54,7 @@ export async function handleUpdateNote(
     try {
       const note = await updateNote(actor, id, input);
       if (!note) {
-        return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return apiError("NOT_FOUND", "Not found", 404);
       }
       return NextResponse.json(toNoteResponseBody(note));
     } catch (err) {
@@ -61,7 +62,7 @@ export async function handleUpdateNote(
       if (mapped) {
         return NextResponse.json(mapped.body, { status: mapped.status });
       }
-      return NextResponse.json({ error: "Failed to update note" }, { status: 500 });
+      return apiError("INTERNAL_ERROR", "Failed to update note", 500);
     }
   }
 
@@ -73,7 +74,7 @@ export async function handleUpdateNote(
         try {
           const note = await updateNote(actor, id, input, client);
           if (!note) {
-            return { status: 404, body: { error: "Not found" } };
+            return { status: 404, body: buildApiErrorBody("NOT_FOUND", "Not found") };
           }
           return { status: 200, body: toNoteResponseBody(note) };
         } catch (err) {
@@ -87,11 +88,11 @@ export async function handleUpdateNote(
     );
 
     if (outcome.kind === "conflict") {
-      return NextResponse.json({ error: "Idempotency-Key already used with a different request" }, { status: 409 });
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
     }
     return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    return NextResponse.json({ error: "Failed to update note" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to update note", 500);
   }
 }
 
@@ -101,12 +102,12 @@ export async function handleDeleteNote(userId: string | null, id: string): Promi
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const note = await softDeleteNote(actor, id);
   if (!note) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toNoteResponseBody(note));
 }

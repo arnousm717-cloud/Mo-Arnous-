@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { deleteTagging } from "@ai-revenue-os/crm";
 import { isValidUuid } from "../../_shared/uuid";
 import { resolveActor, toTaggingResponseBody } from "../handlers";
+import { apiError } from "../../_shared/api-error";
 
 /**
  * Milestone 2.3D. DELETE only — no GET-by-id, no PATCH (Taggings have no
@@ -22,12 +23,12 @@ export async function handleDeleteTagging(userId: string | null, id: string): Pr
     return actor;
   }
   if (!isValidUuid(id)) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const tagging = await deleteTagging(actor, id);
   if (!tagging) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return apiError("NOT_FOUND", "Not found", 404);
   }
   return NextResponse.json(toTaggingResponseBody(tagging));
 }

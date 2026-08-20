@@ -79,10 +79,10 @@ export async function createCompanyForResolvedContext(
   if (ownerId !== undefined) body.ownerId = ownerId;
 
   const response = await handleCreateCompany(userId, body, idempotencyKey);
-  const data = (await response.json()) as { company?: { id: string }; error?: string };
+  const data = (await response.json()) as { company?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 201 && data.company) {
     return { createdId: data.company.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to create the company. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to create the company. Please try again." };
 }

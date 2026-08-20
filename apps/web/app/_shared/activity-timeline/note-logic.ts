@@ -35,12 +35,12 @@ export async function createNoteForResolvedContext(
   }
 
   const response = await handleCreateNote(userId, { relatedToType, relatedToId, body }, idempotencyKey);
-  const data = (await response.json()) as { note?: { id: string }; error?: string };
+  const data = (await response.json()) as { note?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 201 && data.note) {
     return {};
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to create the note. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to create the note. Please try again." };
 }
 
 export async function updateNoteForResolvedContext(
@@ -59,12 +59,12 @@ export async function updateNoteForResolvedContext(
   }
 
   const response = await handleUpdateNote(userId, noteId, { body }, idempotencyKey);
-  const data = (await response.json()) as { note?: { id: string }; error?: string };
+  const data = (await response.json()) as { note?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 200 && data.note) {
     return {};
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to update the note. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to update the note. Please try again." };
 }
 
 export interface DeleteNoteFormState {
@@ -80,6 +80,6 @@ export async function deleteNoteForResolvedContext(
   if (response.status === 200) {
     return { deleted: true };
   }
-  const data = (await response.json()) as { error?: string };
-  return { error: typeof data.error === "string" ? data.error : "Failed to remove the note. Please try again." };
+  const data = (await response.json()) as { error?: { code: string; message: string; request_id: string } };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to remove the note. Please try again." };
 }

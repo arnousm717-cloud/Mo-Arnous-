@@ -103,10 +103,10 @@ export async function updateDealForResolvedContext(
   };
 
   const response = await handleUpdateDeal(userId, dealId, body, idempotencyKey);
-  const data = (await response.json()) as { deal?: { id: string }; error?: string };
+  const data = (await response.json()) as { deal?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 200 && data.deal) {
     return { updatedId: data.deal.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to update the deal. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to update the deal. Please try again." };
 }

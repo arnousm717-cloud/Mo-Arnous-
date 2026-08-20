@@ -120,7 +120,11 @@ describe("taggings API: tenancy / IDOR", () => {
     const missingDelete = await handleDeleteTagging(orgA.userId, nonexistentId);
     expect(crossDelete.status).toBe(404);
     expect(missingDelete.status).toBe(404);
-    expect(await crossDelete.json()).toEqual(await missingDelete.json());
+    const crossDeleteBody = await crossDelete.json();
+    const missingDeleteBody = await missingDelete.json();
+    expect(crossDeleteBody.error.code).toBe(missingDeleteBody.error.code);
+    expect(crossDeleteBody.error.message).toBe(missingDeleteBody.error.message);
+    expect(crossDeleteBody.error.request_id).not.toBe(missingDeleteBody.error.request_id);
 
     const stillExists = await adminPool.query("select id from public.taggings where id = $1", [taggingB]);
     expect(stillExists.rows).toHaveLength(1);
@@ -157,7 +161,11 @@ describe("taggings API: relationship create attacks (cross-org)", () => {
       taggableId: dealA,
     });
     expect(nonexistentRes.status).toBe(400);
-    expect(await res.json()).toEqual(await nonexistentRes.json());
+    const resBody = await res.json();
+    const nonexistentResBody = await nonexistentRes.json();
+    expect(resBody.error.code).toBe(nonexistentResBody.error.code);
+    expect(resBody.error.message).toBe(nonexistentResBody.error.message);
+    expect(resBody.error.request_id).not.toBe(nonexistentResBody.error.request_id);
   });
 
   it("Tagging Org A -> Company Org B -> 400", async () => {

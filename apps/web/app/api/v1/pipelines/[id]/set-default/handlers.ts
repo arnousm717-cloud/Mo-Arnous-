@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { setDefaultPipeline, InvalidPipelineRelationshipError } from "@ai-revenue-os/crm";
 import { resolveActor, toPipelineResponseBody } from "../../handlers";
+import { apiError } from "../../../_shared/api-error";
 
 /**
  * Milestone 2.2D — the explicit default-switch contract this milestone's
@@ -41,8 +42,8 @@ export async function handleSetDefaultPipeline(userId: string | null, id: string
     return NextResponse.json(toPipelineResponseBody(pipeline));
   } catch (err) {
     if (err instanceof InvalidPipelineRelationshipError) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return apiError("NOT_FOUND", "Not found", 404);
     }
-    return NextResponse.json({ error: "Failed to set default pipeline" }, { status: 500 });
+    return apiError("INTERNAL_ERROR", "Failed to set default pipeline", 500);
   }
 }

@@ -74,10 +74,10 @@ export async function updateCompanyForResolvedContext(
   };
 
   const response = await handleUpdateCompany(userId, companyId, body, idempotencyKey);
-  const data = (await response.json()) as { company?: { id: string }; error?: string };
+  const data = (await response.json()) as { company?: { id: string }; error?: { code: string; message: string; request_id: string } };
 
   if (response.status === 200 && data.company) {
     return { updatedId: data.company.id };
   }
-  return { error: typeof data.error === "string" ? data.error : "Failed to update the company. Please try again." };
+  return { error: typeof data.error === "object" && data.error !== null ? data.error.message : "Failed to update the company. Please try again." };
 }

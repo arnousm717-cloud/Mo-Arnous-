@@ -128,8 +128,16 @@ describe("pipeline stages API: adversarial nested-stage IDOR safety", () => {
     expect(wrongParent.status).toBe(404);
     expect(genuinelyMissing.status).toBe(404);
     const wrongParentBody = await wrongParent.json();
-    expect(wrongParentBody).toEqual(await genuinelyMissing.json());
-    expect(wrongParentBody).toEqual({ error: "Not found" });
+    const genuinelyMissingBody = await genuinelyMissing.json();
+    // request_id is a fresh id per response (by design — see docs/04-API-
+    // Architecture.md §1), so the two bodies are compared on code/message
+    // only, not deep-equal as a whole.
+    expect(wrongParentBody).toEqual({
+      error: { code: "NOT_FOUND", message: "Not found", request_id: expect.any(String) },
+    });
+    expect(wrongParentBody.error.code).toBe(genuinelyMissingBody.error.code);
+    expect(wrongParentBody.error.message).toBe(genuinelyMissingBody.error.message);
+    expect(wrongParentBody.error.request_id).not.toBe(genuinelyMissingBody.error.request_id);
   });
 
   it("GET /pipelines/A/stages/B where B belongs to a pipeline in a DIFFERENT organization entirely returns the same 404", async () => {
@@ -141,7 +149,9 @@ describe("pipeline stages API: adversarial nested-stage IDOR safety", () => {
 
     const res = await handleGetPipelineStage(orgA.userId, pipelineA, stageB);
     expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: "Not found" });
+    expect(await res.json()).toEqual({
+      error: { code: "NOT_FOUND", message: "Not found", request_id: expect.any(String) },
+    });
   });
 
   it("PATCH /pipelines/A/stages/B where B belongs to pipeline C returns 404, and does not mutate B", async () => {
@@ -182,8 +192,9 @@ describe("pipeline stages API: adversarial nested-stage IDOR safety", () => {
     const deleteRes = await handleDeletePipelineStage(orgA.userId, pipelineA, stageB);
     expect(patchRes.status).toBe(404);
     expect(deleteRes.status).toBe(404);
-    expect(await patchRes.json()).toEqual({ error: "Not found" });
-    expect(await deleteRes.json()).toEqual({ error: "Not found" });
+    const notFoundBody = { error: { code: "NOT_FOUND", message: "Not found", request_id: expect.any(String) } };
+    expect(await patchRes.json()).toEqual(notFoundBody);
+    expect(await deleteRes.json()).toEqual(notFoundBody);
   });
 });
 
