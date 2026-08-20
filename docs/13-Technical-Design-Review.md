@@ -3571,6 +3571,173 @@ missing `default_organization_id`) found and fixed along the way, both
 disclosed above rather than omitted. Milestone 2.4 is next — see
 `docs/12-Implementation-Milestones.md`.
 
+## Milestone 2.4 — Agency Roll-Up Views
+
+### Milestone 2.4A — Database roll-up views
+
+Four new views (`agency_rollup_companies`/`agency_rollup_contacts`/
+`agency_rollup_deals`/`agency_rollup_pipelines`), each following the exact
+`agency_rollup_organizations` (M1.4) pattern: `security_invoker = false`,
+joined to `organizations`, `WHERE o.agency_id = current_agency() AND
+current_role_key() IN ('agency_owner','agency_admin')`, with an explicit
+`REVOKE ALL` + `GRANT SELECT ... TO authenticated` written into the same
+migration that creates each view — not left to the platform-wide default-ACL
+migration alone, per the lesson of the earlier default-table-privileges
+incident (M1.7/M1.9). Column sets are deliberately minimal: Contacts excludes
+email/phone and other PII-shaped fields; Deals excludes `stage_id` (no
+stages roll-up exists) and `primary_contact_id`/`probability`/`owner_id`;
+Pipelines exposes only `id`/`organization_id`/`name`. `INSERT`/`UPDATE`/
+`DELETE` against every view fail with Postgres's own "cannot
+insert/update/delete into view" error — a structural, join-driven guarantee
+independent of (and stronger than, not a substitute for) the explicit grant.
+
+### Milestone 2.4B — RBAC
+
+Four new permission keys (`companies:agency-rollup-read`,
+`contacts:agency-rollup-read`, `deals:agency-rollup-read`,
+`pipelines:agency-rollup-read`), added only to `agency_owner`/`agency_admin`
+in `PERMISSION_MATRIX`. One migration performing two full, deterministic
+`roles.permission_set` replacements — the same pattern used for every prior
+permission-set migration in this repository.
+
+### Milestone 2.4C — Domain layer
+
+`packages/tenancy/src/agency-rollup.ts` — `listCompaniesForAgency`/
+`listContactsForAgency`/`listDealsForAgency`/`listPipelinesForAgency`, each
+querying only its matching 2.4A view under `withTenantContext`, ordered for
+stable pagination, with a local `resolveAgencyRollupLimit` (`DEFAULT_LIMIT
+25`, `MAX_LIMIT 100`) rather than a new dependency on `packages/crm`'s own
+pagination module. Deliberately authorization-free at this layer — no
+`can()`, no `@ai-revenue-os/auth` dependency — matching the established,
+pre-existing trust model of `listOrganizationsForAgency` exactly. This was a
+genuine architectural decision point, not an oversight: `packages/tenancy`
+has never depended on `@ai-revenue-os/auth`, and the real repository
+precedent (`create-client-org-logic.ts`) already enforces authorization one
+layer above, in `apps/web` — confirmed and approved before implementation.
+
+### Milestone 2.4D — Agency console UI
+
+`apps/web/app/agency/rollup-logic.ts` plus four new pages (`/agency/companies`,
+`/agency/contacts`, `/agency/deals`, `/agency/pipelines`), extending the
+existing `/agency` console shell with four navigation links. This is the
+layer where `can()` is actually checked — a 2.4C roll-up function is never
+called unless the matching `*:agency-rollup-read` permission already
+returned true. Client-organization names are composed here via a single
+`listOrganizationsForAgency` call per request (never a widened 2.4A view),
+falling back to `"Unknown client organization"` rather than ever rendering a
+raw UUID; company/pipeline name resolution for the Contacts/Deals pages is
+independently `can()`-gated per secondary resource. Zero write controls
+exist on any of the four pages (no `<form>`, no `<button>`, no Server
+Action, no click handler) — proven by dedicated structural tests, not just
+asserted.
+
+### Milestone 2.4E — Final audit, test-gap closure & staging verification
+
+A verification-only audit (database security, RBAC, domain layer, UI
+authorization/composition, tenant isolation, organization-label safety,
+write-path absence, and a genuine test-gap analysis) found the milestone
+complete, with exactly one "should-close-before-closeout" gap: the four
+`/agency` navigation links and their corresponding back-links were not
+directly asserted. Closed with structural source-level tests extending
+`apps/web/tests/agency-rollup-console.test.ts`, following this repository's
+existing convention (no browser/rendering test framework introduced). The
+five Milestone 2.4 migrations (4 views + 1 RBAC update) were then applied to
+the staging Supabase project and independently re-verified live — grants,
+`security_invoker`, and the RBAC permission-set snapshot all matched the
+committed migration source exactly, zero drift. See "Milestone 2.4 — Overall
+Closeout" below for the full manual staging/browser verification that
+followed.
+
+### Milestone 2.4 — Overall Closeout
+
+**Automated verification (this repository's own test suite, re-run at
+closeout, working tree clean, commit `efbc6df`).** `pnpm lint`/`typecheck`/
+`build` clean across all 8 packages; `pnpm test` **1,968/1,968 passing**
+across all 7 tested packages (database 533, auth 381, ui 39, compliance 32,
+crm 310, tenancy 46, web 627); migration-safety gate clean, 45 migrations,
+zero drift against staging.
+
+**Database verification (direct, read-only and scoped-write queries against
+the linked staging Supabase project, `damunjcpwxthdjaonatb` /
+`ai-revenue-os-staging`, over the same trusted admin channel used throughout
+this milestone).** The five Milestone 2.4 migrations were independently
+re-verified live with zero drift (2.4E). Every subsequent staging write in
+this closeout was minimal, explicitly pre/post-verified, and none of it
+touched application code, migrations, RLS policies, authentication logic, or
+permission logic:
+- One dedicated staging `agency_owner` test account, created via the
+  product's own `create_agency_with_owner()` function — the only supported
+  agency-creation path, exercised exactly as the real application would.
+- One dedicated staging `org_admin` membership attached to an *existing*
+  client organization (`M24 Test Client`, created earlier through the
+  agency console's own real "create client organization" flow) — no
+  supported invite/member-management UI exists yet in this product (a
+  known, already-disclosed gap carried from Milestone 2.3), so this used the
+  same direct-membership-insert pattern already established in this
+  repository's own test suite (`organization-member-identity.test.ts`),
+  executed once against staging.
+- One `public.users.default_organization_id` correction for that same test
+  account — a recurrence of the exact class of gap first found and fixed
+  during Milestone 2.3's own closeout (a manually-created membership does not
+  get this field set the way `create_organization_with_owner()`'s atomic
+  signup path does); fixed with the same single-column, pre/post-verified
+  `UPDATE` pattern.
+- One minimal client CRM fixture created directly in the staging database —
+  one company, one contact (populated with a real email/phone on the
+  underlying record specifically so the roll-up view's exclusion of those
+  columns is a proven masking, not an accidental absence of data), one
+  pipeline with two active stages (`Qualified`, `sort_order 0`; `Proposal`,
+  `sort_order 1`, added specifically to exercise the Deals Board's
+  multi-stage move UI), and one deal (`M24 Test Company`, `1250 USD`,
+  `status: open`). This was fixture *data*, inserted via the same
+  application-layer INSERT shape `packages/crm`'s own domain functions
+  issue, never a new mechanism, RLS change, or application-code change.
+
+**Manual staging/browser verification (performed by the project owner —
+this repository has no browser-driving test framework of any kind, by
+long-established convention, so this category of evidence is necessarily
+manual, not automated).**
+- Unauthenticated `/agency` correctly redirected to `/login`.
+- An `org_member` account was correctly denied and redirected to
+  `/dashboard`.
+- Logged in as the new `agency_owner` test account: `/agency` and all four
+  roll-up pages (`/agency/companies`, `/agency/contacts`, `/agency/deals`,
+  `/agency/pipelines`) loaded successfully, each showing the fixture's row
+  with the correct client-organization label (never a raw UUID); the
+  Contacts roll-up row showed no email/phone despite the underlying contact
+  record having both; the Deals roll-up row showed company and pipeline
+  **names**, never raw ids; no create/edit/delete/write control was present
+  anywhere on any of the four pages.
+- Logged in as the new `org_admin` test account, the Milestone 2.2 Deals
+  Board and related CRM pages were re-verified end to end against the same
+  fixture (Milestone 2.2 functionality, re-verified here as the natural
+  vehicle for proving the roll-up console against real, non-trivial data,
+  not new Milestone 2.4 scope): the deal appeared under `Qualified (1)` on
+  `/deals/board`; after the second stage was added, the board showed both
+  `Qualified` and `Proposal` columns; the deal was moved
+  **Qualified → Proposal** through the normal "Move to stage" UI control
+  and confirmed to persist after a full browser refresh; `/deals` (list
+  view) and the deal detail page both showed `Stage = Proposal`,
+  consistent with the board; the deal was then moved back
+  **Proposal → Qualified** through the same UI, with final state
+  re-confirmed in the browser (`/deals` showing `M24 Test Company`,
+  `1250 USD`, `open`, `Qualified`) and independently cross-checked against
+  the database (`updated_at` advanced across both moves, proving a genuine
+  round trip, not a stale read).
+
+**Milestone 2.4: PASS — CLOSED.** Every gate has passed: implementation
+complete (2.4A through 2.4D), a fresh final audit found no blocking defect,
+the one real test-coverage gap it found was closed, the five staging
+migrations were verified live with zero drift, and staging *application*
+behavior — including the full agency roll-up console and a fresh
+end-to-end Deals Board stage-move round trip against real fixture data —
+was confirmed working by the project owner. No application code,
+migration, RLS policy, authentication logic, or permission logic was
+changed during any part of the manual staging verification itself; every
+staging write was a pre/post-verified, narrowly-scoped fixture operation,
+disclosed above rather than omitted. Milestone 2.5 is next — see
+`docs/12-Implementation-Milestones.md`.
+
 ---
 
 ## Overall Phase 1 Recommendation
