@@ -42,7 +42,7 @@ Paced for a solo founder building with AI assistance (`01-Vision.md`) — phases
 - Companies, Contacts, Deals, Activities, Notes, Tags
 - Pipelines and Pipeline Stages, kanban deal board (`PipelineBoard`)
 - Agency admin console: client org list, roll-up view scaffolding (`agency_rollup_*`)
-- Core REST API v1 for all CRM resources — shipping from the start with `04-API-Architecture.md`'s foundational conventions: cursor pagination, a standard error envelope, and `Idempotency-Key` support on all mutating requests, so no resource is ever built against inconsistent API behavior that has to be reconciled later
+- Core REST API v1 for all CRM resources — shipping from the start with `04-API-Architecture.md`'s foundational conventions: cursor pagination, a standard error envelope, and `Idempotency-Key` support on mutating requests where the organization-scoped idempotency model is structurally applicable (documented exclusions apply), so no resource is ever built against inconsistent API behavior that has to be reconciled later
 - Design system components in production use (`EntityTable`, `PipelineBoard`, `ActivityTimeline`)
 
 **Deliverables**

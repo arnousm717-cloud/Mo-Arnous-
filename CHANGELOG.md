@@ -405,3 +405,94 @@ M1.3 was intentionally left open after implementation, pending a real signup/ema
 - **The underlying Milestone 2.2 Deals Board was also manually re-verified** against this same fixture, end to end: the deal appeared under `Qualified (1)` on `/deals/board`; a second active stage (`Proposal`) was added to prove multi-stage board behavior; the deal was moved `Qualified → Proposal` through the normal UI "Move to stage" control, confirmed to persist after a full browser refresh, confirmed consistent across `/deals` (list), the deal detail page, and the board; then moved back `Proposal → Qualified` through the same UI, with final state re-confirmed both in the browser (`/deals` showing `M24 Test Company`, `1250 USD`, `open`, `Qualified`) and independently in the database. This is Milestone 2.2 functionality, not new Milestone 2.4 scope — re-verified here because it was the natural vehicle for proving the roll-up console against real, non-trivial CRM data.
 - Full monorepo **1,968/1,968** tests passing across all 7 packages (database 533, auth 381, ui 39, compliance 32, crm 310, tenancy 46, web 627), lint/typecheck/build all clean, migration-safety gate clean at 45 migrations with zero drift against staging.
 - **Milestone 2.4 status: PASS — CLOSED** (`docs/13-Technical-Design-Review.md` "Milestone 2.4 — Overall Closeout").
+
+## Milestone 2.5 — Core API Conventions Applied Platform-Wide
+
+This milestone shipped no new resource — it closed three gaps between
+`docs/04-API-Architecture.md`'s always-documented API contract and what
+M1.4–M2.3D had actually shipped, each disclosed in that doc before this
+milestone began, not discovered mid-implementation.
+
+**Added**
+- Structured API error envelope (`{ "error": { "code", "message",
+  "request_id" } }`) applied platform-wide, replacing the flat
+  `{ "error": "<string>" }` every route previously emitted despite the
+  contract having always specified the structured shape. New
+  `apps/web/app/api/v1/_shared/api-error.ts` (`ApiErrorCode` — a 7-value
+  union — plus `buildApiErrorBody`/`apiError`) is the one canonical
+  constructor every route now uses; `request_id` is a fresh `randomUUID()`
+  per response, never asserted equal between two independently-generated
+  errors. 49 route files and 24 internal consumers updated; `FormState`
+  UI-facing shapes (`error?: string`) deliberately left unchanged.
+- Atomic `Idempotency-Key` support for the three compliance mutations that
+  previously lacked it (`POST /api/v1/consent`, `POST /api/v1/data-
+  subject-requests`, `POST /api/v1/data-subject-requests/{id}/execute`).
+  `packages/compliance`'s four mutation functions each gained an optional
+  trailing `existingClient?: PoolClient` parameter so the idempotency
+  reservation, the mutation, and its completion commit or roll back
+  together as one atomic transaction — the same `runInClientOrTransaction`
+  pattern `packages/crm` already used, generalized out of
+  `packages/crm/src/transaction.ts` and into
+  `packages/database/src/tenant-context.ts` so neither package needed a
+  new dependency on the other. `POST /api/v1/organizations` and `GET
+  .../data-subject-requests/{id}/preview` remain deliberately excluded
+  (no `organizationId` to key on pre-creation; confirmed read-only,
+  respectively) — both disclosed in `docs/04` §2.1/§2.2, not silent gaps.
+- Malformed-path-UUID hardening extended from Activities/Notes/Tags/
+  Taggings (M2.3D) to Companies, Contacts, Deals, Pipelines, and Pipeline
+  Stages — 18 handler functions across 7 files now reject a non-UUID-
+  shaped path `{id}`/`{stageId}` with a clean `404` (via the same shared
+  `isValidUuid` check M2.3D established), before it ever reaches
+  Postgres, in the same auth-then-shape-then-lookup order every other
+  hardened route already used. Nested pipeline-stage routes validate
+  `{id}` and `{stageId}` independently, extending the existing
+  adversarially-proven nested-resource IDOR indistinguishability to a
+  malformed-parent/malformed-child/both-malformed matrix.
+
+**Fixed**
+- Confirmed, by direct empirical probe (a temporary test, run once then
+  fully removed before implementation began), that the pre-2.5C defect on
+  Companies/Contacts/Deals/Pipelines/Pipeline Stages was an **uncaught
+  `DatabaseError`** on a malformed path id, not merely a wrong status
+  code — a materially worse defect than initially assumed.
+- 11 pre-existing tests that asserted full-body `toEqual` across two
+  independently-generated error responses (which only ever worked by
+  coincidence with the old flat-string envelope) corrected to compare
+  `code`/`message` only, never `request_id`.
+
+**Known gaps, explicitly deferred (not oversights)**
+- Malformed *query/body/filter* UUID fields (e.g. `ownerId`, `companyId`
+  filters) on Companies/Contacts/Deals/Pipelines/Pipeline Stages remain
+  unvalidated and surface as a generic `500` — a different input class
+  than the path-parameter hardening this milestone delivered, disclosed
+  in `docs/04-API-Architecture.md` §2.6 as a separate, still-open gap.
+- `POST /api/v1/organizations` has no `Idempotency-Key` support — would
+  require a schema change (`idempotency_keys.organization_id` is
+  currently `NOT NULL`), out of scope for a mechanical retrofit.
+- Cursor pagination itself (the third item in this milestone's original
+  roadmap name) required no code changes — every resource has used it
+  consistently since its own introducing milestone; this milestone's real
+  work was the error-envelope and idempotency/UUID-hardening convergence.
+
+**Closeout — final validation**
+- Full monorepo **2,036/2,036** tests passing across all 7 packages
+  (database 533, auth 381, ui 39, compliance 39, crm 310, tenancy 46, web
+  688) — a monotonic increase from the Milestone 2.4 baseline of 1,968
+  across all three sub-phases (2.5A 1,999 → 2.5B 2,025 → 2.5C 2,036),
+  lint/typecheck/build all clean, zero new migrations (no database schema
+  change of any kind in this milestone).
+- Each sub-phase (2.5A, 2.5B, 2.5C) underwent its own independent,
+  read-only final acceptance audit before being committed and pushed — no
+  staging or browser verification was performed or is claimed for this
+  milestone, since no new table, view, RLS policy, or user-facing page
+  was added; evidence here is exclusively automated/code-level.
+- Two real architectural findings were surfaced and resolved *before*
+  implementation rather than worked around silently: 2.5B's discovery
+  that `packages/compliance`'s mutations couldn't safely participate in
+  `withIdempotency` without the `existingClient` change above, and 2.5C's
+  correction of an initial handler-count estimate (18, not 19) before any
+  code was written.
+- `docs/04-API-Architecture.md` re-verified, across two independent final
+  audits, to contain zero remaining stale or contradictory statements
+  about the error envelope, idempotency, or UUID-hardening conventions.
+- **Milestone 2.5 status: PASS — CLOSED** (`docs/13-Technical-Design-Review.md` "Milestone 2.5 — Overall Closeout").

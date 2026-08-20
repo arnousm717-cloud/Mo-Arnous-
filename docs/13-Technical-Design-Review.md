@@ -3738,6 +3738,177 @@ staging write was a pre/post-verified, narrowly-scoped fixture operation,
 disclosed above rather than omitted. Milestone 2.5 is next — see
 `docs/12-Implementation-Milestones.md`.
 
+## Milestone 2.5 — Core API Conventions Applied Platform-Wide
+
+This milestone closed a documented design/implementation discrepancy in
+`docs/04-API-Architecture.md` §1 rather than adding new resources: the API
+contract had always specified a structured error envelope, atomic
+`Idempotency-Key` handling, and UUID path-shape validation, but three real
+gaps existed between that specification and what M1.4–M2.3D actually
+shipped. Each sub-phase closed exactly one gap, in isolation, with its own
+read-only audit → implementation → final acceptance audit → commit → push
+cycle. No migration, RLS policy, authentication logic, RBAC permission, or
+business-validation rule was changed anywhere in Milestone 2.5 — confirmed
+independently in each sub-phase's own final audit and re-confirmed in this
+closeout.
+
+### Milestone 2.5A — Structured API Error Envelope
+
+Every error response across all `/api/v1` routes previously emitted a flat
+`{ "error": "<string>" }` body, despite `docs/04-API-Architecture.md` §1
+having always specified a structured `{ "error": { "code", "message",
+"request_id" } }` contract — a discrepancy the API doc itself disclosed
+before this milestone rather than silently omitted. Closed by converging
+the code on the documented contract (never the reverse): a new
+`apps/web/app/api/v1/_shared/api-error.ts` (`ApiErrorCode` — a 7-value
+union covering `UNAUTHENTICATED`/`FORBIDDEN`/`NOT_FOUND`/
+`VALIDATION_ERROR`/`CONFLICT`/`IDEMPOTENCY_CONFLICT`/`INTERNAL_ERROR`;
+`buildApiErrorBody`/`apiError`, the latter using `randomUUID()` for
+`request_id`) became the one canonical constructor every route's
+`handlers.ts`/`route.ts` uses — confirmed via `git diff | grep apiError |
+sort -u` returning exactly one distinct call pattern across the entire
+diff, no route left building an error body inline. 49 route files and 24
+internal consumers (`*-logic.ts` plus five `page.tsx` files extracting
+`.error.message` from the new object shape) were updated; `FormState`
+interfaces themselves were left unchanged (`error?: string`) since they are
+UI-facing, not wire-format. Cross-resource contract tests (`api-error-
+envelope.test.ts`, 20 tests) prove 401/403/404/400/409/500 all use the
+structured envelope across every resource family, success responses are
+unaffected, and tenant isolation is unchanged. A pre-existing lesson
+surfaced and fixed during this sub-phase's own audit: 11 pre-existing test
+files had been asserting full-body `toEqual` across two independently-
+generated error responses (cross-org vs. nonexistent), which only ever
+worked by coincidence with a flat string body — corrected to compare
+`code`/`message` only, never `request_id`, which legitimately differs per
+response.
+
+### Milestone 2.5B — Atomic Idempotency for Compliance Mutations
+
+`Idempotency-Key` support existed for every CRM mutation (Companies,
+Contacts, Deals, Pipelines, Pipeline Stages, Activities, Notes, Tags) since
+their own milestones, but had never been extended to the three compliance
+mutations added in M1.6 (`POST /api/v1/consent`, `POST /api/v1/data-
+subject-requests`, `POST /api/v1/data-subject-requests/{id}/execute`) — a
+gap `docs/04-API-Architecture.md` §2.2 had already flagged. A genuine
+architectural blocker was found and reported *before* any wiring code was
+written, not discovered mid-implementation: `packages/compliance`'s four
+mutation functions (`recordConsent`, `fileDataSubjectRequest`,
+`executeUserErasure`, `executeContactErasure`) each independently opened
+their own `withTenantContext` transaction, so naive `withIdempotency`
+wiring would reserve the idempotency key and run the mutation as two
+separate, non-atomic transactions — a failure between them would leave a
+committed key with no corresponding mutation, or vice versa. Approved fix:
+generalize `packages/crm`'s own existing, already-proven
+`runInClientOrTransaction` pattern out of `packages/crm/src/transaction.ts`
+and into `packages/database/src/tenant-context.ts` (exported from
+`packages/database`'s own index; `packages/crm/src/transaction.ts` reduced
+to a one-line re-export, its 8 internal callers confirmed zero-diff), then
+give each of the four compliance functions an additive, optional trailing
+`existingClient?: PoolClient` parameter — omitted, each opens its own
+transaction exactly as before this milestone; supplied, the mutation runs
+on the idempotency reservation's own client, so reservation, mutation, and
+completion commit or roll back together as one atomic unit. Zero change to
+any function's validation, SQL text, or `SECURITY DEFINER` call. Proven,
+not assumed: `packages/compliance/tests/transaction-participation.test.ts`
+(7 tests) manually drives real Postgres transactions to confirm each
+function's write is visible mid-transaction on the shared client and fully
+undone after rollback; three additional failure-injection tests
+(`compliance-api.test.ts` ×2, `dsr-erasure-dispatch.test.ts` ×1) drive
+`withIdempotency` with a callback that runs the real mutation then throws,
+proving mutation + audit + reservation roll back together and a real retry
+then succeeds exactly once. `POST /api/v1/consent` and `POST /api/v1/data-
+subject-requests` gained full idempotency; `/execute` gained it using a
+separate idempotency-scoped actor object (since `executeUserErasure`'s own
+domain context is just `{ userId }`, with no `organizationId` to key on
+directly) and a deliberate design choice that a business-rule rejection
+(e.g. the sole-`org_admin` erasure blocker) is never cached or replayed —
+it rolls back the entire reservation, so a retry is always freshly re-
+evaluated rather than serving a stale denial. `POST /api/v1/organizations`
+and `GET /api/v1/data-subject-requests/{id}/preview` were confirmed, by
+direct architecture/code inspection, out of scope: the former has no
+`organizationId` available to key on (the organization doesn't exist yet
+at request time, and `idempotency_keys.organization_id` is `NOT NULL` —
+retrofitting would require a schema change, out of scope for a mechanical
+retrofit); the latter is confirmed read-only and side-effect-free, so
+there is no side effect to deduplicate.
+
+### Milestone 2.5C — Malformed Path UUID Hardening
+
+M2.3D had already closed this exact gap for Activities/Notes/Tags/Taggings
+(a malformed, non-UUID-shaped path `{id}` → clean `404`, via a shared
+`isValidUuid` check), but explicitly left it open for the pre-2.3D
+resources — Companies, Contacts, Deals, Pipelines, Pipeline Stages —
+disclosed as a known gap in `docs/04` at the time. Confirmed empirically,
+not assumed: a temporary probe test (created, run, then fully removed
+before any implementation, `git status` verified to leave zero trace)
+proved the actual pre-2.5C behavior on GET/DELETE was an **uncaught
+`DatabaseError`**, not merely a wrong status code. Closed by extending the
+same M2.3D `apps/web/app/api/v1/_shared/uuid.ts` (`isValidUuid`) check to
+every path `{id}`/`{stageId}` parameter across all five resources, in the
+same position in the request-handling order M2.3D established (auth →
+403/401 short-circuit → UUID-shape check → 404 → domain/DB access — never
+reordered, proven by direct line-by-line trace in the final audit): 18
+handler functions in total (Companies 3, Contacts 3, Deals 3, Pipelines 3,
+`set-default` 1, Pipeline Stages list/create 2, Pipeline Stages
+`{stageId}` 3 — an initial "19 handlers" scope estimate was an arithmetic
+error, corrected before implementation, confirmed not to have caused any
+handler to be missed). Nested pipeline-stage routes validate `{id}` and
+`{stageId}` independently, so a malformed parent, a malformed child, or
+both malformed at once all resolve to the same indistinguishable `404` as
+a genuinely nonexistent or cross-organization id — extending the
+adversarially-proven nested-resource IDOR safety M2.2B established to a
+third case. 11 new tests across five resource test files cover malformed-
+vs-cross-org-vs-nonexistent indistinguishability, auth/RBAC-executing-
+before-validation, and the nested parent/child/both-malformed matrix.
+Explicitly out of scope, and disclosed as a separate, still-open gap in
+`docs/04` §2.6: malformed *query/body/filter* UUID fields (e.g. `ownerId`,
+`companyId` filters) on these same resources still reach Postgres
+unvalidated and surface as a generic `500` — a different class of input
+(not a path parameter) that this sub-phase never claimed to cover.
+
+### Milestone 2.5 — Overall Closeout
+
+**Automated verification (this repository's own test suite, re-run at
+closeout, working tree clean, commit `5704ef5`, the tip of 2.5C).** `pnpm
+lint`/`typecheck`/`build` clean across all 8 packages; `pnpm test`
+**2,036/2,036 passing** across all 7 tested packages (database 533, auth
+381, ui 39, compliance 39, crm 310, tenancy 46, web 688) — a monotonic
+increase across all three sub-phases from the Milestone 2.4 baseline of
+1,968 (2.5A: 1,999; 2.5B: 2,025; 2,5C: 2,036), never a decrease; migration-
+safety gate clean, no new migrations in Milestone 2.5 (zero database schema
+change of any kind — confirmed by `git diff --stat` across all three sub-
+phase commits touching no file under `packages/database/migrations/`).
+
+**No database or manual staging/browser verification was performed for
+this milestone, and none is claimed.** Unlike Milestone 2.4, Milestone
+2.5's scope is entirely a code-level API-contract convergence — no new
+table, view, RLS policy, or user-facing page was added — so its evidence
+is exclusively the automated test suite above plus the read-only,
+empirical, from-source final acceptance audit each sub-phase underwent
+before being committed (2.5A, 2.5B, 2.5C final audits, each independently
+finding the implementation complete before any push).
+
+**Milestone 2.5: PASS — CLOSED.** All three sub-phases (2.5A structured
+error envelope, 2.5B atomic compliance idempotency, 2.5C malformed path-
+UUID hardening) shipped, each following the same audit → implement → final
+acceptance audit → commit → push discipline as every prior milestone in
+this repository, each closing a gap `docs/04-API-Architecture.md` had
+already disclosed rather than introducing new undocumented behavior. Two
+real architectural findings were surfaced and resolved before
+implementation rather than worked around silently: 2.5B's non-atomic
+compliance-transaction blocker (resolved via the `runInClientOrTransaction`
+generalization) and 2.5C's arithmetic scope-count correction (18 handlers,
+not 19, confirmed not to have caused any omission). `docs/04-API-
+Architecture.md` was re-verified, across two independent final audits, to
+contain zero remaining stale or contradictory statements about the error
+envelope, idempotency, or UUID-hardening conventions as of the end of
+2.5C. Every deliberate exclusion (organizations POST, DSR preview,
+query/body/filter UUID fields) is disclosed in `docs/04` as a named,
+reasoned gap, never a silent omission. Phase 2 — CRM is now fully
+delivered; Phase 3 (Website Intelligence, starting with 3.1 Tracking
+Script + Ingestion Endpoint) is next — see
+`docs/12-Implementation-Milestones.md`.
+
 ---
 
 ## Overall Phase 1 Recommendation
