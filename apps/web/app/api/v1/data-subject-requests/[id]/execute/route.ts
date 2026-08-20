@@ -15,6 +15,6 @@ export const POST = withRequestLogging(
 
     const { id } = await params;
     const user = await getAuthenticatedUser();
-    return handleExecuteErasure(user?.id ?? null, id);
+    return handleExecuteErasure(user?.id ?? null, id, request.headers.get("Idempotency-Key"));
   },
 );

@@ -19,5 +19,5 @@ export const POST = withRequestLogging("POST", "/api/v1/data-subject-requests", 
     return apiError("VALIDATION_ERROR", "Invalid JSON body", 400);
   }
 
-  return handleFileDataSubjectRequest(user?.id ?? null, body);
+  return handleFileDataSubjectRequest(user?.id ?? null, body, request.headers.get("Idempotency-Key"));
 });

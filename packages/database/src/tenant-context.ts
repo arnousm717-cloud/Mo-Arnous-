@@ -66,3 +66,31 @@ export async function withTenantContext<T>(
     client.release(failed);
   }
 }
+
+/**
+ * Runs `fn` against `existingClient` if supplied — the caller (e.g. the
+ * 2.1F-A idempotency helper) already owns an open, correctly tenant-scoped
+ * transaction and wants this mutation to run inside it, not a separate one,
+ * so reservation + mutation + response persistence stay atomic — or opens a
+ * fresh `withTenantContext` transaction otherwise, the ordinary,
+ * backward-compatible path every existing caller/test already uses
+ * unchanged.
+ *
+ * Originally introduced in `packages/crm` (Milestone 2.1F-A) for its own
+ * create/update functions; generalized here in Milestone 2.5B so
+ * `packages/compliance`'s mutation functions can adopt the identical
+ * pattern for Idempotency-Key wiring without either package depending on
+ * the other — both already depend on `@ai-revenue-os/database`, so this is
+ * the natural shared home. `packages/crm/src/transaction.ts` now re-exports
+ * this implementation rather than duplicating it.
+ */
+export async function runInClientOrTransaction<T>(
+  ctx: RequestContext,
+  existingClient: PoolClient | undefined,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  if (existingClient) {
+    return fn(existingClient);
+  }
+  return withTenantContext(ctx, fn);
+}

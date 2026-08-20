@@ -1,4 +1,5 @@
-import { withTenantContext } from "@ai-revenue-os/database";
+import type { PoolClient } from "pg";
+import { runInClientOrTransaction, withTenantContext } from "@ai-revenue-os/database";
 
 /**
  * Data Subject Request filing/read lifecycle + the preview/execute erasure
@@ -66,11 +67,15 @@ function toDataSubjectRequest(row: DataSubjectRequestRow): DataSubjectRequest {
  * but callers attempting to file one are rejected here with a clear error
  * rather than left to discover, only at execution time, that nothing will
  * ever process it. Filing itself and its audit entry happen inside one
- * withTenantContext transaction (M1.6 constraint #9).
+ * transaction (M1.6 constraint #9). Milestone 2.5B: accepts an optional
+ * existingClient so the Idempotency-Key reservation, this mutation, and
+ * the reservation's own completion can share one outer transaction —
+ * omitted, behavior is byte-for-byte unchanged from before 2.5B.
  */
 export async function fileDataSubjectRequest(
   ctx: { userId: string; organizationId: string; roleKey: string },
   input: FileDataSubjectRequestInput,
+  existingClient?: PoolClient,
 ): Promise<DataSubjectRequest> {
   if (input.requestType !== "delete") {
     throw new Error(
@@ -78,7 +83,7 @@ export async function fileDataSubjectRequest(
     );
   }
 
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     const inserted = await client.query<DataSubjectRequestRow>(
       `insert into public.data_subject_requests (organization_id, subject_type, subject_id, request_type)
        values ($1, $2, $3, $4)
@@ -189,13 +194,19 @@ interface ErasureResultRow {
  * sole-org_admin blocker, performs the hard delete, and writes the audit
  * entry — all inside that function's own single transaction. This wrapper
  * adds no logic of its own precisely so there is no app-layer path that
- * could diverge from what the database actually enforces.
+ * could diverge from what the database actually enforces. Milestone 2.5B:
+ * accepts an optional existingClient so the Idempotency-Key reservation,
+ * this call, and the reservation's own completion can share one outer
+ * transaction — omitted, behavior is byte-for-byte unchanged from before
+ * 2.5B. Only connection ownership changes; the SQL function invoked, its
+ * arguments, and its own internal validation are untouched either way.
  */
 export async function executeUserErasure(
   ctx: { userId: string },
   dsrId: string,
+  existingClient?: PoolClient,
 ): Promise<ErasureResult> {
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     const r = await client.query<ErasureResultRow>("select * from public.execute_user_erasure($1, $2)", [
       dsrId,
       ctx.userId,
@@ -272,13 +283,17 @@ interface ContactErasureResultRow {
  * delete, and writes the audit entry — all inside that function's own
  * single transaction. This wrapper adds no logic of its own precisely so
  * there is no app-layer path that could diverge from what the database
- * actually enforces (mirroring executeUserErasure above).
+ * actually enforces (mirroring executeUserErasure above). Milestone 2.5B:
+ * accepts an optional existingClient for the same reason and with the same
+ * guarantee as executeUserErasure above — only connection ownership
+ * changes.
  */
 export async function executeContactErasure(
   ctx: { userId: string },
   dsrId: string,
+  existingClient?: PoolClient,
 ): Promise<ContactErasureResult> {
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     const r = await client.query<ContactErasureResultRow>("select * from public.execute_contact_erasure($1, $2)", [
       dsrId,
       ctx.userId,

@@ -19,5 +19,5 @@ export const POST = withRequestLogging("POST", "/api/v1/consent", async (request
     return apiError("VALIDATION_ERROR", "Invalid JSON body", 400);
   }
 
-  return handleRecordConsent(user?.id ?? null, body);
+  return handleRecordConsent(user?.id ?? null, body, request.headers.get("Idempotency-Key"));
 });

@@ -1,4 +1,5 @@
-import { withTenantContext } from "@ai-revenue-os/database";
+import type { PoolClient } from "pg";
+import { runInClientOrTransaction } from "@ai-revenue-os/database";
 
 /**
  * Staff-recorded consent (docs/04-API-Architecture.md §2's "Consent"
@@ -47,15 +48,20 @@ interface ConsentRecordRow {
  * and this one are independent layers, same as everywhere else in this
  * codebase (docs/08-Security.md §2).
  *
- * Writes consent_records and its audit_logs entry inside one
- * withTenantContext transaction — synchronous and transactionally aligned
- * with the action being logged (M1.6 constraint #9).
+ * Writes consent_records and its audit_logs entry inside one transaction —
+ * synchronous and transactionally aligned with the action being logged
+ * (M1.6 constraint #9). Milestone 2.5B: accepts an optional existingClient
+ * so the Idempotency-Key reservation, this mutation, and the reservation's
+ * own completion can share one outer transaction (see
+ * runInClientOrTransaction) — omitted, behavior is byte-for-byte unchanged
+ * from before 2.5B (opens its own withTenantContext transaction).
  */
 export async function recordConsent(
   ctx: { userId: string; organizationId: string; roleKey: string },
   input: RecordConsentInput,
+  existingClient?: PoolClient,
 ): Promise<ConsentRecord> {
-  return withTenantContext(ctx, async (client) => {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
     const inserted = await client.query<ConsentRecordRow>(
       `insert into public.consent_records
          (organization_id, subject_type, subject_id, consent_type, status, source, ip_address)

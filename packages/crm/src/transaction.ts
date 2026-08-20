@@ -1,25 +1,10 @@
-import type { PoolClient } from "pg";
-import { withTenantContext, type RequestContext } from "@ai-revenue-os/database";
-
 /**
- * Runs `fn` against `existingClient` if supplied — the caller (e.g. the
- * 2.1F-A idempotency helper) already owns an open, correctly tenant-scoped
- * transaction and wants this mutation to run inside it, not a separate
- * one, so reservation + mutation + response persistence stay atomic — or
- * opens a fresh withTenantContext transaction otherwise, the ordinary,
- * backward-compatible path every existing caller/test already uses
- * unchanged. Shared by companies.ts and contacts.ts's create/update
- * functions — genuine duplication, not speculative sharing (Milestone
- * 2.1F-A). No HTTP concept enters packages/crm here: PoolClient is a
- * database-layer type this package already imports internally.
+ * Milestone 2.5B: `runInClientOrTransaction` moved to `@ai-revenue-os/
+ * database` (generalized so `packages/compliance` can adopt the identical
+ * pattern without a new cross-package dependency in either direction — see
+ * that package's own copy of this comment for the full rationale). Re-
+ * exported here unchanged so every existing caller in this package
+ * (companies.ts, contacts.ts, deals.ts, pipelines.ts, pipeline-stages.ts,
+ * activities.ts, notes.ts, tags.ts) keeps working with zero changes.
  */
-export async function runInClientOrTransaction<T>(
-  ctx: RequestContext & { organizationId: string },
-  existingClient: PoolClient | undefined,
-  fn: (client: PoolClient) => Promise<T>,
-): Promise<T> {
-  if (existingClient) {
-    return fn(existingClient);
-  }
-  return withTenantContext(ctx, fn);
-}
+export { runInClientOrTransaction } from "@ai-revenue-os/database";

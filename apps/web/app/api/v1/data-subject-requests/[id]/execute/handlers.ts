@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { can, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
 import { getDataSubjectRequestById, executeUserErasure, executeContactErasure } from "@ai-revenue-os/compliance";
 import { apiError } from "../../../_shared/api-error";
+import { withIdempotency } from "../../../_shared/idempotency";
 
 /**
  * Irreversible (M1.6 Decision D, dispatch added M2.1F-C) —
@@ -17,7 +18,11 @@ import { apiError } from "../../../_shared/api-error";
  * nonexistent id is a plain 404 and subject_type is read exclusively from
  * that server-fetched row — never from the request, and never assumed.
  */
-export async function handleExecuteErasure(userId: string | null, id: string): Promise<NextResponse> {
+export async function handleExecuteErasure(
+  userId: string | null,
+  id: string,
+  idempotencyKey: string | null,
+): Promise<NextResponse> {
   if (!userId) {
     return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
@@ -36,11 +41,7 @@ export async function handleExecuteErasure(userId: string | null, id: string): P
     return apiError("VALIDATION_ERROR", `subject_type '${dsr.subjectType}' has no erasure fulfillment logic`, 400);
   }
 
-  try {
-    const result =
-      dsr.subjectType === "user" ? await executeUserErasure({ userId }, id) : await executeContactErasure({ userId }, id);
-    return NextResponse.json({ result });
-  } catch (err) {
+  function mapExecuteError(err: unknown): NextResponse | null {
     const message = err instanceof Error ? err.message : "";
     if (message.includes("data subject request not found") || message.includes("contact not found")) {
       return apiError("NOT_FOUND", "Not found", 404);
@@ -57,6 +58,58 @@ export async function handleExecuteErasure(userId: string | null, id: string): P
     if (message.includes("only supports")) {
       return apiError("VALIDATION_ERROR", message, 400);
     }
+    return null;
+  }
+
+  if (!idempotencyKey) {
+    try {
+      const result =
+        dsr.subjectType === "user" ? await executeUserErasure({ userId }, id) : await executeContactErasure({ userId }, id);
+      return NextResponse.json({ result });
+    } catch (err) {
+      const mapped = mapExecuteError(err);
+      if (mapped) return mapped;
+      return apiError("INTERNAL_ERROR", "Failed to execute erasure", 500);
+    }
+  }
+
+  // Milestone 2.5B: idempotency reservation is scoped by organizationId
+  // (the tenant-isolation key idempotency_keys itself requires), entirely
+  // separate from the {userId}-only ctx executeUserErasure/
+  // executeContactErasure need — the SECURITY DEFINER SQL functions derive
+  // everything else from auth.uid() + the dsrId.
+  const idempotencyActor = { userId, organizationId: orgContext.organizationId, roleKey: orgContext.roleKey };
+
+  try {
+    const outcome = await withIdempotency(
+      idempotencyActor,
+      {
+        rawIdempotencyKey: idempotencyKey,
+        method: "POST",
+        route: `/api/v1/data-subject-requests/${id}/execute`,
+        body: {},
+      },
+      async (client) => {
+        // Reservation + the real erasure + completion all share this one
+        // client/transaction — see executeUserErasure/executeContactErasure's
+        // own comment for the approved "Option A" atomicity fix. The
+        // destructive DELETE and the reservation's own completion commit
+        // or roll back together; nothing is ever half-persisted.
+        const result =
+          dsr.subjectType === "user"
+            ? await executeUserErasure({ userId }, id, client)
+            : await executeContactErasure({ userId }, id, client);
+        return { status: 200, body: { result } };
+      },
+    );
+
+    if (outcome.kind === "conflict") {
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
+    }
+    return NextResponse.json(outcome.body, { status: outcome.status });
+  } catch (err) {
+    const mapped = mapExecuteError(err);
+    if (mapped) return mapped;
     return apiError("INTERNAL_ERROR", "Failed to execute erasure", 500);
   }
 }

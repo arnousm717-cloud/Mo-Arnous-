@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { can, resolveOrganizationContextForUser } from "@ai-revenue-os/auth";
 import { recordConsent, type ConsentStatus, type ConsentSubjectType, type ConsentType } from "@ai-revenue-os/compliance";
 import { apiError } from "../_shared/api-error";
+import { withIdempotency } from "../_shared/idempotency";
 
 /**
  * Kept out of route.ts deliberately — same reasoning as every other
@@ -35,7 +36,11 @@ function isNonEmptyString(value: unknown): value is string {
  * context, never the request body, matching every other mutating route in
  * this codebase.
  */
-export async function handleRecordConsent(userId: string | null, rawBody: unknown): Promise<NextResponse> {
+export async function handleRecordConsent(
+  userId: string | null,
+  rawBody: unknown,
+  idempotencyKey: string | null,
+): Promise<NextResponse> {
   if (!userId) {
     return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
@@ -67,21 +72,45 @@ export async function handleRecordConsent(userId: string | null, rawBody: unknow
     return apiError("VALIDATION_ERROR", "source must be a string when provided", 400);
   }
 
+  const actor = { userId, organizationId: orgContext.organizationId, roleKey: orgContext.roleKey };
+  const input = {
+    subjectType: body.subjectType as ConsentSubjectType,
+    subjectId: body.subjectId,
+    consentType: body.consentType as ConsentType,
+    status: body.status as ConsentStatus,
+    ...(source ? { source } : {}),
+  };
+
+  if (!idempotencyKey) {
+    try {
+      const consent = await recordConsent(actor, input);
+      return NextResponse.json({ consent }, { status: 201 });
+    } catch {
+      // Never forward raw DB/driver error text to the client — same
+      // discipline as handleCreateOrganization.
+      return apiError("INTERNAL_ERROR", "Failed to record consent", 500);
+    }
+  }
+
   try {
-    const consent = await recordConsent(
-      { userId, organizationId: orgContext.organizationId, roleKey: orgContext.roleKey },
-      {
-        subjectType: body.subjectType as ConsentSubjectType,
-        subjectId: body.subjectId,
-        consentType: body.consentType as ConsentType,
-        status: body.status as ConsentStatus,
-        ...(source ? { source } : {}),
+    const outcome = await withIdempotency(
+      actor,
+      { rawIdempotencyKey: idempotencyKey, method: "POST", route: "/api/v1/consent", body: input },
+      async (client) => {
+        // Milestone 2.5B: recordConsent runs on this same client, inside
+        // the reservation's own transaction — reservation, mutation, and
+        // completion commit or roll back together (see the approved
+        // "Option A" atomicity fix in recordConsent itself).
+        const consent = await recordConsent(actor, input, client);
+        return { status: 201, body: { consent } };
       },
     );
-    return NextResponse.json({ consent }, { status: 201 });
+
+    if (outcome.kind === "conflict") {
+      return apiError("IDEMPOTENCY_CONFLICT", "Idempotency-Key already used with a different request", 409);
+    }
+    return NextResponse.json(outcome.body, { status: outcome.status });
   } catch {
-    // Never forward raw DB/driver error text to the client — same
-    // discipline as handleCreateOrganization.
     return apiError("INTERNAL_ERROR", "Failed to record consent", 500);
   }
 }
