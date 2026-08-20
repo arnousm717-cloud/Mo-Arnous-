@@ -71,9 +71,14 @@ async function seedSession(
   visitorId: string,
   trackingSiteId: string,
 ): Promise<string> {
+  // anonymous_session_id (3.1B prerequisite patch, 20260820100000) is a
+  // client-generated opaque correlation identifier at the real call
+  // site — a fresh random value here is sufficient for every schema/FK
+  // assertion in this file, none of which are about session-identity
+  // semantics themselves.
   const r = await client.query<{ id: string }>(
-    "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id) values ($1, $2, $3) returning id",
-    [organizationId, visitorId, trackingSiteId],
+    "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id, anonymous_session_id) values ($1, $2, $3, $4) returning id",
+    [organizationId, visitorId, trackingSiteId, randomUUID()],
   );
   return r.rows[0]!.id;
 }
@@ -232,10 +237,10 @@ describe("visitor_sessions: cross-tenant composite FKs (same-org success, cross-
       await client.query("begin");
       const visitorId = await seedVisitor(client, fx.orgAId);
       await expect(
-        client.query("insert into public.visitor_sessions (organization_id, visitor_id) values ($1, $2)", [
-          fx.orgAId,
-          visitorId,
-        ]),
+        client.query(
+          "insert into public.visitor_sessions (organization_id, visitor_id, anonymous_session_id) values ($1, $2, $3)",
+          [fx.orgAId, visitorId, randomUUID()],
+        ),
       ).rejects.toThrow(/null value in column "tracking_site_id"|not-null constraint/i);
     } finally {
       await client.query("rollback");

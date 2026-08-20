@@ -4117,6 +4117,104 @@ record endpoints, rate limiting), and 3.1D (tracking script, site-key
 exposure) remain to be built before Milestone 3.1 itself can be
 considered for an Overall Closeout section.
 
+### Milestone 3.1B — Pre-Implementation Audit and Database Prerequisites
+
+**Status: IN PROGRESS — `packages/intelligence` itself does not exist
+yet.** This subsection covers only the read-only pre-implementation
+audit and the two narrowly-scoped database prerequisites it surfaced —
+not the domain-layer implementation, which remains a separate, later
+step of its own.
+
+**Pre-implementation audit** found two genuine, empirically-verified
+blockers rather than assuming the schema was ready as-is:
+
+1. **Consent access.** `consent_records`' own RLS (`org_admin`-only
+   `SELECT`, `20260810100100_enable_compliance_rls.sql`) makes the table
+   completely unreadable to the role-less ingestion pathway — proven,
+   not reasoned about: a real, `granted` `consent_records` row was
+   seeded, then read using exactly the session shape the ingestion
+   pathway would use (`organization_id` set, no role at all), and the
+   read returned zero rows despite the row genuinely existing. A domain
+   layer built against this table directly would see "no consent" for
+   every visitor, permanently.
+2. **Session semantics.** No documentation anywhere in this repository
+   specified visitor-session identity, timeout, or continuity rules.
+   Proceeding without an explicit decision would have meant inventing a
+   business rule silently.
+
+**Approved resolutions, implemented in this same sub-phase:**
+
+- **`check_visitor_cookie_tracking_consent(organization_id, anonymous_id)
+  returns boolean`** (`20260820100100`, `SECURITY DEFINER`, `STABLE`,
+  `search_path = public`) — answers exactly one question: is the latest
+  `cookie_tracking` consent state for this organization/visitor
+  `granted`. Filters `subject_type = 'visitor'`,
+  `consent_type = 'cookie_tracking'`, orders
+  `recorded_at desc, id desc limit 1` (a deterministic tie-break,
+  approved as sufficient without an additional schema column — the
+  residual same-instant-collision case is vanishingly rare and
+  self-correcting, not a blocker). No matching row and a withdrawn
+  latest row both resolve to `false`, deliberately indistinguishable,
+  mirroring this platform's established cross-org/nonexistent-
+  indistinguishable doctrine. The **same deliberate exception** as
+  `resolve_tracking_site()` — no `auth.uid()` guard, since the ingestion
+  pathway has no authenticated identity to check; its authorization
+  primitive is an already-resolved `organization_id` plus the visitor's
+  own opaque `anonymous_id`. `EXECUTE` to `authenticated` only;
+  `PUBLIC`/`anon` have zero `EXECUTE` by construction. **Does not modify
+  `consent_records`' existing RLS policies in any way** — confirmed by a
+  regression test proving a role-less read still sees nothing directly,
+  and an `org_admin`-scoped read still works exactly as before.
+- **Session identity — a client-generated opaque UUID, not a
+  server-side timeout heuristic.** `visitor_sessions` gained
+  `anonymous_session_id uuid not null` plus
+  `UNIQUE (organization_id, tracking_site_id, visitor_id,
+  anonymous_session_id)` (constraint
+  `visitor_sessions_org_site_visitor_session_key`, `20260820100000`) —
+  an **additive follow-up migration**, not an edit to the original 3.1A
+  schema migration (`visitor_sessions` had zero rows in every
+  environment this milestone has touched, confirmed before writing the
+  migration, so the `NOT NULL` column needed no default/backfill step).
+  The four-column uniqueness scope is deliberate: the same client-
+  generated UUID may legitimately, independently repeat across
+  different organizations, different tracking sites, or different
+  visitors within the same organization, without collision — only the
+  exact 4-tuple must be unique, which is also the scope a future
+  resolve-or-create upsert will target. The client session UUID is
+  explicitly **not** an organization identifier, not an authorization
+  credential, never trusted for tenant selection, and never a database
+  primary key — `visitor_sessions.id` remains the real, server-generated
+  PK. Browser storage lifetime, cookie/localStorage policy, and any
+  timeout heuristic remain undecided and are not invented here — 3.1B
+  accepts an already-supplied session UUID as a correlation identifier,
+  nothing more. Session-start attribution fields (`referrer`,
+  `utm_source/medium/campaign`, `landing_page`, `device_type`) are
+  unchanged by this patch and are expected to describe session-start
+  context only, never silently overwritten by later events in the same
+  session — a domain-layer rule for the still-unbuilt 3.1B
+  implementation to honor, not something this schema patch enforces
+  itself.
+
+**Validation.** Full monorepo **2,118/2,118** tests passing across all 7
+packages (database 615, auth 381, ui 39, compliance 39, crm 310, tenancy
+46, web 688) — a monotonic increase from the Milestone 3.1A baseline of
+2,092 (+26: 24 new hand-written tests plus 2 auto-generated
+`migration-safety.test.ts` cases). `pnpm lint`/`typecheck`/`build` clean
+across all 8 packages. Both new migrations are purely additive (`ALTER
+TABLE ADD COLUMN`/`ADD CONSTRAINT`/`CREATE FUNCTION` only, no
+destructive statement) and applied cleanly across a fresh `supabase db
+reset` replaying the full 50-migration chain in order. The original
+3.1A migration files were not edited. Three pre-existing 3.1A test files
+required a small, expected update (supplying the newly-required
+`anonymous_session_id` in their own `visitor_sessions` fixture inserts)
+— a consequence of the additive `NOT NULL` column, not a defect in
+either the new migration or the original tests.
+
+**Milestone 3.1B: database prerequisites complete, domain layer not yet
+started.** `packages/intelligence` remains unbuilt. 3.1C (ingestion +
+consent-record endpoints, rate limiting) and 3.1D (tracking script) also
+remain unbuilt. Milestone 3.1 overall remains **IN PROGRESS**.
+
 ---
 
 ## Overall Phase 1 Recommendation

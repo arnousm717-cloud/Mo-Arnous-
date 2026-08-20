@@ -59,12 +59,12 @@ async function seedFixture(): Promise<Fixture> {
       [orgB.rows[0]!.id, randomUUID()],
     );
     const sessionA = await client.query<{ id: string }>(
-      "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id) values ($1, $2, $3) returning id",
-      [orgA.rows[0]!.id, visitorA.rows[0]!.id, siteA.rows[0]!.id],
+      "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id, anonymous_session_id) values ($1, $2, $3, $4) returning id",
+      [orgA.rows[0]!.id, visitorA.rows[0]!.id, siteA.rows[0]!.id, randomUUID()],
     );
     const sessionB = await client.query<{ id: string }>(
-      "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id) values ($1, $2, $3) returning id",
-      [orgB.rows[0]!.id, visitorB.rows[0]!.id, siteB.rows[0]!.id],
+      "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id, anonymous_session_id) values ($1, $2, $3, $4) returning id",
+      [orgB.rows[0]!.id, visitorB.rows[0]!.id, siteB.rows[0]!.id, randomUUID()],
     );
     const eventA = await client.query<{ id: string }>(
       "insert into public.visitor_events (organization_id, session_id, event_type) values ($1, $2, 'pageview') returning id",
@@ -190,8 +190,8 @@ describe("visitor_sessions RLS: cross-tenant SELECT/UPDATE/INSERT isolation", ()
     await expect(
       withTenantContext({ organizationId: fx.orgAId }, async (client) => {
         await client.query(
-          "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id) values ($1, $2, $3)",
-          [fx.orgBId, fx.visitorAId, fx.siteAId],
+          "insert into public.visitor_sessions (organization_id, visitor_id, tracking_site_id, anonymous_session_id) values ($1, $2, $3, $4)",
+          [fx.orgBId, fx.visitorAId, fx.siteAId, randomUUID()],
         );
       }),
     ).rejects.toThrow(/new row violates row-level security policy/i);
