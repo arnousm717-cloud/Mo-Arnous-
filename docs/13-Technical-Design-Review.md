@@ -3909,6 +3909,214 @@ delivered; Phase 3 (Website Intelligence, starting with 3.1 Tracking
 Script + Ingestion Endpoint) is next — see
 `docs/12-Implementation-Milestones.md`.
 
+## Milestone 3.1 — Website Intelligence: Tracking Script + Ingestion Endpoint
+
+**Status: IN PROGRESS — not closed.** Only sub-phase 3.1A (schema +
+tenant-resolution mechanism) is complete as of this section. 3.1B
+(domain layer, `packages/intelligence`), 3.1C (public ingestion + consent-
+record endpoints, rate limiting), and 3.1D (tracking script, site-key
+exposure) remain unbuilt. No tracking script, ingestion endpoint,
+consent-record endpoint, rate limiting, or `GET /api/v1/visitors` exists
+yet. No n8n integration exists in this milestone at all (deliberately —
+Milestone 3.3 is the first n8n workflow, per `docs/12-Implementation-
+Milestones.md`'s Phase 3 map). No browser/staging verification is claimed
+for this milestone — 3.1A is schema-only and has no user-facing surface
+to verify.
+
+### Milestone 3.1 — Approved Architecture
+
+Two architecture decisions were made before any implementation, following
+this repository's established audit → propose → approve → implement
+discipline:
+
+**Decision A — public tracking tenant resolution.** A dedicated,
+single-purpose `tracking_sites` credential (never `api_keys`) resolves an
+anonymous ingestion request to `organization_id`. The browser never
+supplies `organization_id` as tenant authority — only the opaque
+tracking-site identifier, which the backend resolves server-side via a
+narrow `SECURITY DEFINER` function before establishing tenant context.
+The credential is intentionally public/non-secret (unlike `api_keys`),
+unguessable (`gen_random_uuid()`), and structurally incapable of granting
+anything beyond tracking ingestion. All subsequent visitor/session/event
+writes execute through the existing, unmodified `withTenantContext`
+mechanism — no parallel tenant-isolation mechanism was introduced.
+
+**Decision B — 3.1 uses direct synchronous domain-layer ingestion, not
+n8n.** `docs/06-n8n-Workflow-Architecture.md` §3 ("Workflow: Website
+Visitor Intelligence") describes the *Phase-3-complete* end state, where
+ingestion is eventually queued into n8n — that description does not
+apply to 3.1/3.2, which precede Milestone 3.3 (the first n8n workflow).
+`docs/06` §3 should be corrected/annotated to make this explicit once
+3.1C's ingestion endpoint actually ships and the discrepancy becomes
+user-facing; not corrected in 3.1A itself, since nothing in 3.1A
+contradicts it yet (no ingestion behavior exists at all).
+
+**Consent policy — universal strict default.** `cookie_tracking` consent
+must be `granted` before any `website_visitors`/`visitor_sessions`/
+`visitor_events` row is ever persisted, for every organization, with no
+tenant-configurable bypass in 3.1. `docs/06` §3's phrase about an
+organization's "configured consent requirement" describes a mechanism
+that does not exist anywhere in this repository's schema or code and is
+not a 3.1 feature — flagged for eventual correction, not implemented.
+Consent recording is architecturally a separate call from event
+ingestion (never a field inside the ingestion payload the server reads
+for authorization), keyed directly by the tracking script's client-
+generated `anonymous_id` — verified directly against `consent_records`'
+own migration DDL that `subject_id` carries no foreign key, so a consent
+grant can exist before any `website_visitors` row does. Enforcement
+itself (the actual consent check gating a write) arrives with the
+ingestion endpoint in 3.1C — 3.1A only lays the schema groundwork this
+policy depends on. Pre-consent anonymous identifiers are a memory-only
+product/architecture default for the future tracking script (3.1D), not
+a claimed universal legal requirement.
+
+### Milestone 3.1A — Tracking Sites + Website Visitor Intelligence Schema
+
+Schema-only sub-phase: three migrations
+(`20260820090000_create_tracking_visitor_intelligence_schema.sql`,
+`20260820090100_enable_tracking_visitor_intelligence_rls.sql`,
+`20260820090200_create_resolve_tracking_site_function.sql`), zero
+application code, zero routes, zero domain package. `packages/intelligence`
+was deliberately not created in 3.1A, per the approved scope — reserved
+for 3.1B.
+
+**`tracking_sites`** — `id` (the public tracking-site identifier itself,
+`gen_random_uuid()`), `organization_id`, `label`, `created_by`,
+`created_at`, `revoked_at`. Deliberately not hashed at rest: analyzed
+explicitly against `api_keys.key_hash`'s own precedent and rejected as
+the wrong model — a value published in every installing customer's page
+source by design has no confidentiality to protect, so hashing it would
+defend against a threat (database-read exposure) that provides no actual
+protection, since the same value is already readable from the public
+page. Its real security properties are unguessability (`gen_random_uuid()`'s
+~122 bits) and narrow scope, not secrecy. `allowed_origins` and
+`last_seen_at` were deliberately excluded from this initial shape — the
+former is unenforced/undesigned in 3.1 (see below), the latter would
+introduce a write-on-every-beacon hot-row pattern with no current writer
+to justify it. Multiple rows per organization are supported (one per
+tenant property); rotation is a new row plus revoking the old one, `id`
+itself is never mutated or reused.
+
+**`resolve_tracking_site(p_site_key uuid) returns table(organization_id
+uuid)`** (`SECURITY DEFINER`, `set search_path = public`) — resolves the
+identifier to its owning organization, or zero rows for a nonexistent or
+revoked identifier, deliberately indistinguishable (mirrors this
+platform's established cross-org/nonexistent-indistinguishable doctrine,
+`docs/04-API-Architecture.md` §2.6, applied here to credential
+resolution). The only function in this schema's history with no
+`auth.uid()` caller-identity guard — every other `SECURITY DEFINER`
+function here (`create_organization_with_owner`,
+`preview_user_erasure`, etc.) begins with `if auth.uid() is null then
+raise exception`, and this one deliberately must not, since a public
+tracking beacon has no authenticated identity to check; its
+authorization primitive is possession of the identifier itself. Returns
+`organization_id` only — no label, no timestamps, no distinguishable
+"revoked" vs. "never existed" signal. `EXECUTE` granted to `authenticated`
+only (verified directly against `packages/database/src/tenant-
+context.ts`: the application backend always executes Postgres queries as
+`authenticated`, for every caller type, including the future anonymous
+ingestion path — there is no direct `anon`-to-Postgres connection
+anywhere in this architecture); `PUBLIC`/`anon` have zero `EXECUTE`,
+inherited automatically from the M1.7-era default-privilege hardening
+(`20260812140000`), no explicit revoke needed. Malformed (non-UUID-
+shaped) input is rejected by Postgres itself at the parameter type-cast
+boundary with a raw error — confirmed empirically, not assumed — and is
+explicitly documented as the future ingestion endpoint's own
+responsibility to validate before calling this function (3.1C,
+mirroring Milestone 2.3D/2.5C's `isValidUuid` precedent), not something
+invented or duplicated at the database layer.
+
+**`website_visitors`/`visitor_sessions`/`visitor_events`** — implemented
+per `docs/03-Database-Architecture.md` §2.3 as corrected in this same
+sub-phase (see `docs/03`'s own Milestone 3.1A implementation note):
+`website_visitors` gained `UNIQUE (organization_id, anonymous_id)` for
+race-safe resolve-or-create; `visitor_sessions`/`visitor_events` each
+gained an `organization_id` column beyond docs/03's original one-line
+spec, which never listed one for either table. This is a genuine,
+reported schema discrepancy, not a silent deviation: every other
+high-volume child table in this repository needing a tenant-safety
+composite FK to its parent (`activities`, `notes`, `taggings`,
+`pipeline_stages`, `deals` — `20260812120000` through `20260817090000`)
+denormalizes `organization_id` onto the child row specifically to make
+that composite FK possible; a plain `session_id`/`tracking_site_id`/
+`visitor_id` FK alone provides zero structural tenant-safety guarantee
+independent of RLS. The full cross-tenant FK chain: `tracking_sites`
+(`unique(organization_id, id)`) ← `visitor_sessions`
+(`visitor_sessions_tracking_site_org_fk`) and `website_visitors`
+(`unique(organization_id, id)`) ← `visitor_sessions`
+(`visitor_sessions_visitor_org_fk`) ← `visitor_sessions`
+(`unique(organization_id, id)`) ← `visitor_events`
+(`visitor_events_session_org_fk`) — mirroring the `pipelines` →
+`pipeline_stages` → `deals` two/three-level composite-FK precedent
+(`20260814100000`) exactly, adversarially tested (a session/event cannot
+reference a parent row belonging to a different organization, even via
+direct SQL bypassing the application layer). `website_visitors.
+identified_contact_id` also gained a composite FK to `contacts`
+(`on delete set null`, mirroring `deals.primary_contact_id`) — schema-
+ready, deliberately unpopulated by any 3.1A code path (Milestone 3.2's
+responsibility). `visitor_sessions.tracking_site_id` is `NOT NULL` —
+confirmed safe against the pre-implementation invariant audit (a
+brand-new table with zero existing rows has no backfill incompatibility).
+
+**RLS** — standard ADR-003 tenant-isolation policy shape on all four
+tables (`organization_id = current_org()`), no broad cross-tenant
+policy, no anonymous `INSERT` policy, no RLS bypass for ordinary
+visitor/session/event writes. The only pre-tenant, cross-organization
+read anywhere in this sub-phase is `resolve_tracking_site()` itself —
+it does not touch these tables' own RLS policies. `anon` has zero grant
+of any kind on any of the four tables, adversarially confirmed. No
+`DELETE` grant/policy exists on any of the four (lifecycle is
+`revoked_at` for `tracking_sites`, nonexistent for the other three in
+3.1A — hard-delete is a structural safety net tested directly, never an
+ordinary application path).
+
+**Tests** — 53 new tests across three files: `tracking-visitor-
+intelligence-schema.test.ts` (18, cross-tenant composite-FK rejection
+for every parent/child pair, `UNIQUE(organization_id, anonymous_id)`
+enforcement and its correct same-`anonymous_id`-different-org
+permissiveness, `event_type` CHECK, hard-delete cascade/restrict/set-null
+behavior for every relationship), `tracking-visitor-intelligence-
+rls.test.ts` (24, cross-tenant SELECT/UPDATE/INSERT-spoofing isolation
+for all four tables, `anon` zero-grant confirmation), `tracking-site-
+resolver.test.ts` (11, correct resolution/revoked/nonexistent-
+indistinguishable behavior, minimal-column-return verification,
+malformed-UUID raw-Postgres-error confirmation, full privilege-boundary
+matrix mirroring `function-execution-privilege-hardening.test.ts`'s own
+style). Two test-authoring corrections found and fixed during
+implementation (not schema defects): an `anon`-vs-RLS error-message
+assertion initially expected a table-grant-denied message but the actual,
+empirically-confirmed behavior — identical on the long-established
+`companies` table, not new here — is `permission denied for function
+current_org`, since every RLS policy in this schema evaluates that
+function; and an unset-session-GUC assertion initially expected an empty
+string but Postgres returns SQL `NULL` for a never-set custom GUC in a
+fresh transaction.
+
+### Milestone 3.1A — Validation
+
+Full monorepo **2,092/2,092** tests passing across all 7 packages
+(database 589, auth 381, ui 39, compliance 39, crm 310, tenancy 46, web
+688) — a monotonic increase from the Milestone 2.5 baseline of 2,036
+(+56: 53 new hand-written tests plus 3 auto-generated
+`migration-safety.test.ts` cases, one per new migration file, all
+correctly classified as non-destructive). `pnpm lint`/`typecheck`/`build`
+clean across all 8 packages. Three new, purely additive migrations
+(`CREATE TABLE`/`CREATE INDEX`/`CREATE POLICY`/`CREATE FUNCTION` only, no
+`DROP`/`TRUNCATE`/destructive statement of any kind) applied cleanly to
+the local Supabase instance. `git diff --check` clean; secret scan of the
+full diff found no credential-shaped content beyond the well-known,
+publicly-documented local Supabase default connection string already
+used identically by every other test file in this repository. Zero
+files under `apps/`, zero RLS/RBAC/auth/permission logic outside the one
+new, narrowly-scoped resolver function, zero migrations touching any
+pre-existing table.
+
+**Milestone 3.1A: schema and tenant-resolution mechanism complete, not
+a milestone close.** 3.1B (domain layer), 3.1C (ingestion + consent-
+record endpoints, rate limiting), and 3.1D (tracking script, site-key
+exposure) remain to be built before Milestone 3.1 itself can be
+considered for an Overall Closeout section.
+
 ---
 
 ## Overall Phase 1 Recommendation
