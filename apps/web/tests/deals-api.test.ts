@@ -121,6 +121,39 @@ describe("deals API: tenancy", () => {
     expect((await handleUpdateDeal(orgA.userId, dealB, { amount: 1 }, null)).status).toBe(404);
     expect((await handleDeleteDeal(orgA.userId, dealB)).status).toBe(404);
   });
+
+  it("Milestone 2.5C: a malformed (non-UUID-shaped) :id returns the same structured 404 as cross-org/nonexistent, for GET/PATCH/DELETE", async () => {
+    const orgA = await createOrgWithRole("org_admin", "org-a-deals-malformed");
+    const orgB = await createOrgWithRole("org_admin", "org-b-deals-malformed");
+    const { pipelineId, stageId } = await seedPipelineWithStage(orgB.organizationId);
+    const dealB = await seedDeal(orgB.organizationId, pipelineId, stageId);
+    const nonexistentId = randomUUID();
+    const malformedId = "not-a-uuid";
+
+    const malformedGet = await handleGetDeal(orgA.userId, malformedId);
+    const crossGet = await handleGetDeal(orgA.userId, dealB);
+    const missingGet = await handleGetDeal(orgA.userId, nonexistentId);
+    expect(malformedGet.status).toBe(404);
+    const malformedBody = await malformedGet.json();
+    const crossBody = await crossGet.json();
+    const missingBody = await missingGet.json();
+    expect(malformedBody.error.code).toBe(crossBody.error.code);
+    expect(malformedBody.error.code).toBe(missingBody.error.code);
+    expect(malformedBody.error.message).toBe(crossBody.error.message);
+    expect(malformedBody.error.message).toBe(missingBody.error.message);
+    expect(malformedBody.error.request_id.length).toBeGreaterThan(0);
+
+    expect((await handleUpdateDeal(orgA.userId, malformedId, { amount: 1 }, null)).status).toBe(404);
+    expect((await handleDeleteDeal(orgA.userId, malformedId)).status).toBe(404);
+  });
+
+  it("Milestone 2.5C: a malformed :id still requires auth/RBAC first — unauthenticated -> 401, wrong permission -> 403", async () => {
+    const malformedId = "not-a-uuid";
+    expect((await handleGetDeal(null, malformedId)).status).toBe(401);
+
+    const { userId } = await createOrgWithRole("org_viewer", "malformed-perm-viewer-deals");
+    expect((await handleUpdateDeal(userId, malformedId, { amount: 1 }, null)).status).toBe(403);
+  });
 });
 
 describe("deals API: create/list/single/update/soft-delete", () => {

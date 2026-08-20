@@ -198,6 +198,67 @@ describe("pipeline stages API: adversarial nested-stage IDOR safety", () => {
   });
 });
 
+describe("pipeline stages API: Milestone 2.5C — malformed-UUID hardening (parent and child independently)", () => {
+  it("LIST/CREATE: a malformed parent pipeline id returns the same 404 as a nonexistent/cross-org one", async () => {
+    const { userId } = await createOrgWithRole("org_admin");
+    const malformedId = "not-a-uuid";
+
+    const listRes = await handleListPipelineStages(userId, malformedId);
+    expect(listRes.status).toBe(404);
+    const listBody = await listRes.json();
+    expect(listBody).toEqual({ error: { code: "NOT_FOUND", message: "Not found", request_id: expect.any(String) } });
+
+    const createRes = await handleCreatePipelineStage(userId, malformedId, { name: "X", sortOrder: 1 }, null);
+    expect(createRes.status).toBe(404);
+  });
+
+  it("GET/PATCH/DELETE: a malformed parent id, malformed stage id, and both malformed all return the same structured 404 as a genuinely nonexistent stage", async () => {
+    const { organizationId, userId } = await createOrgWithRole("org_admin");
+    const pipelineA = await seedPipeline(organizationId, { name: "Pipeline A Malformed" });
+    const realStage = await seedPipelineStage(organizationId, pipelineA, { name: "Real Stage" });
+    const malformedId = "not-a-uuid";
+
+    const genuinelyMissing = await handleGetPipelineStage(userId, pipelineA, randomUUID());
+    expect(genuinelyMissing.status).toBe(404);
+    const genuinelyMissingBody = await genuinelyMissing.json();
+
+    const malformedParent = await handleGetPipelineStage(userId, malformedId, realStage);
+    const malformedChild = await handleGetPipelineStage(userId, pipelineA, malformedId);
+    const bothMalformed = await handleGetPipelineStage(userId, malformedId, malformedId);
+    for (const res of [malformedParent, malformedChild, bothMalformed]) {
+      expect(res.status).toBe(404);
+    }
+    const malformedParentBody = await malformedParent.json();
+    const malformedChildBody = await malformedChild.json();
+    const bothMalformedBody = await bothMalformed.json();
+    for (const body of [malformedParentBody, malformedChildBody, bothMalformedBody]) {
+      expect(body.error.code).toBe(genuinelyMissingBody.error.code);
+      expect(body.error.message).toBe(genuinelyMissingBody.error.message);
+      expect(typeof body.error.request_id).toBe("string");
+      expect(body.error.request_id.length).toBeGreaterThan(0);
+    }
+
+    expect((await handleUpdatePipelineStage(userId, malformedId, realStage, { name: "X" }, null)).status).toBe(404);
+    expect((await handleUpdatePipelineStage(userId, pipelineA, malformedId, { name: "X" }, null)).status).toBe(404);
+    expect((await handleDeletePipelineStage(userId, malformedId, realStage)).status).toBe(404);
+    expect((await handleDeletePipelineStage(userId, pipelineA, malformedId)).status).toBe(404);
+
+    // The real stage must be untouched by any of the malformed-id attempts.
+    const stillReal = await handleGetPipelineStage(userId, pipelineA, realStage);
+    expect(stillReal.status).toBe(200);
+    expect((await stillReal.json()).stage.name).toBe("Real Stage");
+  });
+
+  it("a malformed id still requires auth/RBAC first — unauthenticated -> 401, wrong permission -> 403", async () => {
+    const malformedId = "not-a-uuid";
+    expect((await handleGetPipelineStage(null, malformedId, malformedId)).status).toBe(401);
+
+    const { organizationId, userId } = await createOrgWithRole("org_viewer", "malformed-perm-viewer-stages");
+    void organizationId;
+    expect((await handleUpdatePipelineStage(userId, malformedId, malformedId, { name: "X" }, null)).status).toBe(403);
+  });
+});
+
 describe("pipeline stages API: create/list/single/update/soft-delete", () => {
   it("create -> 201, get -> 200, update -> 200, delete -> 200 with deletedAt, then GET -> 404", async () => {
     const { organizationId, userId } = await createOrgWithRole("org_admin");

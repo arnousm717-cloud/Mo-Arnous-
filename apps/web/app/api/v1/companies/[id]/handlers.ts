@@ -3,6 +3,7 @@ import { updateCompany, getCompanyById, softDeleteCompany, type UpdateCompanyInp
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toCompanyResponseBody } from "../handlers";
 import { apiError, buildApiErrorBody } from "../../_shared/api-error";
+import { isValidUuid } from "../../_shared/uuid";
 
 /**
  * Milestone 2.1F-B. Cross-org and nonexistent :id are indistinguishable —
@@ -10,6 +11,10 @@ import { apiError, buildApiErrorBody } from "../../_shared/api-error";
  * return null for both cases identically; this file adds no special-casing
  * at all, it just maps null to 404 (matching the existing DSR-route
  * precedent, apps/web/app/api/v1/data-subject-requests/[id]/handlers.ts).
+ * Milestone 2.5C: a malformed (non-UUID-shaped) :id is classified
+ * identically — also 404, never reaching the database at all — extending
+ * the 2.3D doctrine (activities/[id]/handlers.ts) to this pre-2.3D
+ * resource.
  */
 
 /** hasOwnProperty-preserving extraction — a key is only present on the
@@ -37,6 +42,9 @@ export async function handleGetCompany(userId: string | null, id: string): Promi
   if (actor instanceof NextResponse) {
     return actor;
   }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
+  }
 
   const company = await getCompanyById(actor, id);
   if (!company) {
@@ -54,6 +62,9 @@ export async function handleUpdateCompany(
   const actor = await resolveActor(userId, "companies:update");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -109,6 +120,9 @@ export async function handleDeleteCompany(userId: string | null, id: string): Pr
   const actor = await resolveActor(userId, "companies:delete");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const company = await softDeleteCompany(actor, id);

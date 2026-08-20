@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { setDefaultPipeline, InvalidPipelineRelationshipError } from "@ai-revenue-os/crm";
 import { resolveActor, toPipelineResponseBody } from "../../handlers";
 import { apiError } from "../../../_shared/api-error";
+import { isValidUuid } from "../../../_shared/uuid";
 
 /**
  * Milestone 2.2D — the explicit default-switch contract this milestone's
@@ -35,6 +36,9 @@ export async function handleSetDefaultPipeline(userId: string | null, id: string
   const actor = await resolveActor(userId, "pipelines:update");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   try {

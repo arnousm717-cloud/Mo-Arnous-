@@ -3,6 +3,7 @@ import { updateDeal, getDealById, softDeleteDeal, type UpdateDealInput } from "@
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toDealResponseBody } from "../handlers";
 import { apiError, buildApiErrorBody } from "../../_shared/api-error";
+import { isValidUuid } from "../../_shared/uuid";
 
 /**
  * Milestone 2.2D. Cross-org and nonexistent :id are indistinguishable —
@@ -40,6 +41,9 @@ export async function handleGetDeal(userId: string | null, id: string): Promise<
   if (actor instanceof NextResponse) {
     return actor;
   }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
+  }
 
   const deal = await getDealById(actor, id);
   if (!deal) {
@@ -57,6 +61,9 @@ export async function handleUpdateDeal(
   const actor = await resolveActor(userId, "deals:update");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -112,6 +119,9 @@ export async function handleDeleteDeal(userId: string | null, id: string): Promi
   const actor = await resolveActor(userId, "deals:delete");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const deal = await softDeleteDeal(actor, id);

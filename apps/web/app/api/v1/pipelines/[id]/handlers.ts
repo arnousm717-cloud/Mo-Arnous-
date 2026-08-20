@@ -3,6 +3,7 @@ import { updatePipeline, getPipelineById, softDeletePipeline, CannotDeleteDefaul
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toPipelineResponseBody } from "../handlers";
 import { apiError, buildApiErrorBody } from "../../_shared/api-error";
+import { isValidUuid } from "../../_shared/uuid";
 
 /**
  * Milestone 2.2D. Cross-org and nonexistent :id are indistinguishable —
@@ -49,6 +50,9 @@ export async function handleGetPipeline(userId: string | null, id: string): Prom
   if (actor instanceof NextResponse) {
     return actor;
   }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
+  }
 
   const pipeline = await getPipelineById(actor, id);
   if (!pipeline) {
@@ -66,6 +70,9 @@ export async function handleUpdatePipeline(
   const actor = await resolveActor(userId, "pipelines:update");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -121,6 +128,9 @@ export async function handleDeletePipeline(userId: string | null, id: string): P
   const actor = await resolveActor(userId, "pipelines:delete");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   try {

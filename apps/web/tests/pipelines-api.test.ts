@@ -112,6 +112,39 @@ describe("pipelines API: tenancy", () => {
     expect((await handleDeletePipeline(orgA.userId, pipelineB)).status).toBe(404);
     expect((await handleSetDefaultPipeline(orgA.userId, pipelineB)).status).toBe(404);
   });
+
+  it("Milestone 2.5C: a malformed (non-UUID-shaped) :id returns the same structured 404 as cross-org/nonexistent, for GET/PATCH/DELETE/set-default", async () => {
+    const orgA = await createOrgWithRole("org_admin", "org-a-pipelines-malformed");
+    const orgB = await createOrgWithRole("org_admin", "org-b-pipelines-malformed");
+    const pipelineB = await seedPipeline(orgB.organizationId);
+    const nonexistentId = randomUUID();
+    const malformedId = "not-a-uuid";
+
+    const malformedGet = await handleGetPipeline(orgA.userId, malformedId);
+    const crossGet = await handleGetPipeline(orgA.userId, pipelineB);
+    const missingGet = await handleGetPipeline(orgA.userId, nonexistentId);
+    expect(malformedGet.status).toBe(404);
+    const malformedBody = await malformedGet.json();
+    const crossBody = await crossGet.json();
+    const missingBody = await missingGet.json();
+    expect(malformedBody.error.code).toBe(crossBody.error.code);
+    expect(malformedBody.error.code).toBe(missingBody.error.code);
+    expect(malformedBody.error.message).toBe(crossBody.error.message);
+    expect(malformedBody.error.message).toBe(missingBody.error.message);
+    expect(malformedBody.error.request_id.length).toBeGreaterThan(0);
+
+    expect((await handleUpdatePipeline(orgA.userId, malformedId, { name: "Pwned" }, null)).status).toBe(404);
+    expect((await handleDeletePipeline(orgA.userId, malformedId)).status).toBe(404);
+    expect((await handleSetDefaultPipeline(orgA.userId, malformedId)).status).toBe(404);
+  });
+
+  it("Milestone 2.5C: a malformed :id still requires auth/RBAC first — unauthenticated -> 401, wrong permission -> 403", async () => {
+    const malformedId = "not-a-uuid";
+    expect((await handleGetPipeline(null, malformedId)).status).toBe(401);
+
+    const { userId } = await createOrgWithRole("org_viewer", "malformed-perm-viewer-pipelines");
+    expect((await handleUpdatePipeline(userId, malformedId, { name: "X" }, null)).status).toBe(403);
+  });
 });
 
 describe("pipelines API: create/list/single/update/soft-delete", () => {

@@ -9,6 +9,7 @@ import { withIdempotency } from "../../../../_shared/idempotency";
 import { resolveActor } from "../../../handlers";
 import { mapCrmError, toStageResponseBody } from "../handlers";
 import { apiError, buildApiErrorBody } from "../../../../_shared/api-error";
+import { isValidUuid } from "../../../../_shared/uuid";
 
 /**
  * Milestone 2.2D.
@@ -50,6 +51,9 @@ export async function handleGetPipelineStage(
   if (actor instanceof NextResponse) {
     return actor;
   }
+  if (!isValidUuid(pipelineId) || !isValidUuid(stageId)) {
+    return apiError("NOT_FOUND", "Not found", 404);
+  }
 
   const stage = await getPipelineStageById(actor, pipelineId, stageId);
   if (!stage) {
@@ -68,6 +72,9 @@ export async function handleUpdatePipelineStage(
   const actor = await resolveActor(userId, "pipelines:update");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(pipelineId) || !isValidUuid(stageId)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -127,6 +134,9 @@ export async function handleDeletePipelineStage(
   const actor = await resolveActor(userId, "pipelines:delete");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(pipelineId) || !isValidUuid(stageId)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const stage = await softDeletePipelineStage(actor, pipelineId, stageId);

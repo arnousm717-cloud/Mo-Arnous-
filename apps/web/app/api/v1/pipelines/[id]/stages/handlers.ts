@@ -11,6 +11,7 @@ import {
 import { withIdempotency } from "../../../_shared/idempotency";
 import { resolveActor } from "../../handlers";
 import { apiError, buildApiErrorBody } from "../../../_shared/api-error";
+import { isValidUuid } from "../../../_shared/uuid";
 
 /**
  * Milestone 2.2D. Nested resource — pipeline_stages has no permission
@@ -85,6 +86,9 @@ export async function handleListPipelineStages(userId: string | null, pipelineId
   if (actor instanceof NextResponse) {
     return actor;
   }
+  if (!isValidUuid(pipelineId)) {
+    return apiError("NOT_FOUND", "Not found", 404);
+  }
 
   const pipeline = await getPipelineById(actor, pipelineId);
   if (!pipeline) {
@@ -104,6 +108,9 @@ export async function handleCreatePipelineStage(
   const actor = await resolveActor(userId, "pipelines:create");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(pipelineId)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractCreateInput(rawBody, pipelineId);

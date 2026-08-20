@@ -115,6 +115,38 @@ describe("contacts API: tenancy", () => {
     expect((await handleUpdateContact(orgA.userId, contactB, { firstName: "Pwned" }, null)).status).toBe(404);
     expect((await handleDeleteContact(orgA.userId, contactB)).status).toBe(404);
   });
+
+  it("Milestone 2.5C: a malformed (non-UUID-shaped) :id returns the same structured 404 as cross-org/nonexistent, for GET/PATCH/DELETE", async () => {
+    const orgA = await createOrgWithRole("org_admin", "org-a-malformed");
+    const orgB = await createOrgWithRole("org_admin", "org-b-malformed");
+    const contactB = await seedContact(orgB.organizationId);
+    const nonexistentId = randomUUID();
+    const malformedId = "not-a-uuid";
+
+    const malformedGet = await handleGetContact(orgA.userId, malformedId);
+    const crossGet = await handleGetContact(orgA.userId, contactB);
+    const missingGet = await handleGetContact(orgA.userId, nonexistentId);
+    expect(malformedGet.status).toBe(404);
+    const malformedBody = await malformedGet.json();
+    const crossBody = await crossGet.json();
+    const missingBody = await missingGet.json();
+    expect(malformedBody.error.code).toBe(crossBody.error.code);
+    expect(malformedBody.error.code).toBe(missingBody.error.code);
+    expect(malformedBody.error.message).toBe(crossBody.error.message);
+    expect(malformedBody.error.message).toBe(missingBody.error.message);
+    expect(malformedBody.error.request_id.length).toBeGreaterThan(0);
+
+    expect((await handleUpdateContact(orgA.userId, malformedId, { firstName: "Pwned" }, null)).status).toBe(404);
+    expect((await handleDeleteContact(orgA.userId, malformedId)).status).toBe(404);
+  });
+
+  it("Milestone 2.5C: a malformed :id still requires auth/RBAC first — unauthenticated -> 401, wrong permission -> 403", async () => {
+    const malformedId = "not-a-uuid";
+    expect((await handleGetContact(null, malformedId)).status).toBe(401);
+
+    const { userId } = await createOrgWithRole("org_viewer", "malformed-perm-viewer");
+    expect((await handleUpdateContact(userId, malformedId, { firstName: "X" }, null)).status).toBe(403);
+  });
 });
 
 describe("contacts API: CRUD", () => {

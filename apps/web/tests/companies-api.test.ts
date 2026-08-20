@@ -118,6 +118,39 @@ describe("companies API: tenancy", () => {
     // correct permission — always 404
     expect(crossGet.status).not.toBe(403);
   });
+
+  it("Milestone 2.5C: a malformed (non-UUID-shaped) :id returns the same structured 404 as cross-org/nonexistent, for GET/PATCH/DELETE", async () => {
+    const orgA = await createOrgWithRole("org_admin", "org-a-malformed");
+    const orgB = await createOrgWithRole("org_admin", "org-b-malformed");
+    const companyB = await seedCompany(orgB.organizationId);
+    const nonexistentId = randomUUID();
+    const malformedId = "not-a-uuid";
+
+    const malformedGet = await handleGetCompany(orgA.userId, malformedId);
+    const crossGet = await handleGetCompany(orgA.userId, companyB);
+    const missingGet = await handleGetCompany(orgA.userId, nonexistentId);
+    expect(malformedGet.status).toBe(404);
+    const malformedBody = await malformedGet.json();
+    const crossBody = await crossGet.json();
+    const missingBody = await missingGet.json();
+    expect(malformedBody.error.code).toBe(crossBody.error.code);
+    expect(malformedBody.error.code).toBe(missingBody.error.code);
+    expect(malformedBody.error.message).toBe(crossBody.error.message);
+    expect(malformedBody.error.message).toBe(missingBody.error.message);
+    expect(typeof malformedBody.error.request_id).toBe("string");
+    expect(malformedBody.error.request_id.length).toBeGreaterThan(0);
+
+    expect((await handleUpdateCompany(orgA.userId, malformedId, { name: "Pwned" }, null)).status).toBe(404);
+    expect((await handleDeleteCompany(orgA.userId, malformedId)).status).toBe(404);
+  });
+
+  it("Milestone 2.5C: a malformed :id still requires auth/RBAC first — unauthenticated -> 401, wrong permission -> 403, never 404 before those", async () => {
+    const malformedId = "not-a-uuid";
+    expect((await handleGetCompany(null, malformedId)).status).toBe(401);
+
+    const { userId } = await createOrgWithRole("org_viewer", "malformed-perm-viewer");
+    expect((await handleUpdateCompany(userId, malformedId, { name: "X" }, null)).status).toBe(403);
+  });
 });
 
 describe("companies API: CRUD", () => {

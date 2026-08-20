@@ -3,8 +3,10 @@ import { updateContact, getContactById, softDeleteContact, type UpdateContactInp
 import { withIdempotency } from "../../_shared/idempotency";
 import { resolveActor, mapCrmError, toContactResponseBody } from "../handlers";
 import { apiError, buildApiErrorBody } from "../../_shared/api-error";
+import { isValidUuid } from "../../_shared/uuid";
 
-/** Milestone 2.1F-B. Mirrors companies/[id]/handlers.ts exactly. */
+/** Milestone 2.1F-B. Mirrors companies/[id]/handlers.ts exactly. Milestone
+ * 2.5C: malformed :id hardening also mirrors that file exactly. */
 
 function extractUpdateInput(rawBody: unknown): UpdateContactInput {
   const body = (rawBody && typeof rawBody === "object" ? rawBody : {}) as Record<string, unknown>;
@@ -28,6 +30,9 @@ export async function handleGetContact(userId: string | null, id: string): Promi
   if (actor instanceof NextResponse) {
     return actor;
   }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
+  }
 
   const contact = await getContactById(actor, id);
   if (!contact) {
@@ -45,6 +50,9 @@ export async function handleUpdateContact(
   const actor = await resolveActor(userId, "contacts:update");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const input = extractUpdateInput(rawBody);
@@ -100,6 +108,9 @@ export async function handleDeleteContact(userId: string | null, id: string): Pr
   const actor = await resolveActor(userId, "contacts:delete");
   if (actor instanceof NextResponse) {
     return actor;
+  }
+  if (!isValidUuid(id)) {
+    return apiError("NOT_FOUND", "Not found", 404);
   }
 
   const contact = await softDeleteContact(actor, id);
