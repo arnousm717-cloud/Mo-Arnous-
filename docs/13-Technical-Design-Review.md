@@ -3911,17 +3911,19 @@ Script + Ingestion Endpoint) is next — see
 
 ## Milestone 3.1 — Website Intelligence: Tracking Script + Ingestion Endpoint
 
-**Status: IN PROGRESS — not closed.** Only sub-phase 3.1A (schema +
-tenant-resolution mechanism) is complete as of this section. 3.1B
-(domain layer, `packages/intelligence`), 3.1C (public ingestion + consent-
-record endpoints, rate limiting), and 3.1D (tracking script, site-key
-exposure) remain unbuilt. No tracking script, ingestion endpoint,
-consent-record endpoint, rate limiting, or `GET /api/v1/visitors` exists
-yet. No n8n integration exists in this milestone at all (deliberately —
-Milestone 3.3 is the first n8n workflow, per `docs/12-Implementation-
-Milestones.md`'s Phase 3 map). No browser/staging verification is claimed
-for this milestone — 3.1A is schema-only and has no user-facing surface
-to verify.
+**Status: IN PROGRESS — not closed.** Sub-phase 3.1A (schema +
+tenant-resolution mechanism) and 3.1B (database prerequisites +
+domain layer, `packages/intelligence`) are complete as of this section.
+3.1C (public ingestion + consent-record endpoints, rate limiting) and
+3.1D (tracking script, site-key exposure) remain unbuilt. No tracking
+script, ingestion endpoint, consent-record endpoint, rate limiting, or
+`GET /api/v1/visitors` exists yet. No visitor identification exists
+either (Milestone 3.2, not yet started). No n8n integration exists in
+this milestone at all (deliberately — Milestone 3.3 is the first n8n
+workflow, per `docs/12-Implementation-Milestones.md`'s Phase 3 map). No
+browser/staging verification is claimed for this milestone — 3.1A is
+schema-only and 3.1B is a domain-layer package with no route or UI of
+its own; neither has a user-facing surface to verify.
 
 ### Milestone 3.1 — Approved Architecture
 
@@ -4210,10 +4212,122 @@ required a small, expected update (supplying the newly-required
 — a consequence of the additive `NOT NULL` column, not a defect in
 either the new migration or the original tests.
 
-**Milestone 3.1B: database prerequisites complete, domain layer not yet
-started.** `packages/intelligence` remains unbuilt. 3.1C (ingestion +
-consent-record endpoints, rate limiting) and 3.1D (tracking script) also
-remain unbuilt. Milestone 3.1 overall remains **IN PROGRESS**.
+**Milestone 3.1B database prerequisites: complete** (this subsection's own
+scope). The domain layer itself is covered in the next subsection.
+
+### Milestone 3.1B — Domain Layer (`packages/intelligence`)
+
+**Status: IN PROGRESS overall (Milestone 3.1) — the domain layer is now
+built, but no HTTP route, public endpoint, tracking script, rate
+limiting, or n8n integration exists anywhere in this repository.** 3.1C
+(public ingestion + consent-record endpoints, rate limiting) and 3.1D
+(tracking script) remain unbuilt. No browser/staging verification is
+claimed — this sub-phase has no user-facing surface.
+
+**Package created**: `packages/intelligence`, dependency set confirmed
+`@ai-revenue-os/database` only — re-verified against `docs/02-Software-
+Architecture.md` §4's own aspirational `intelligence: database, crm` row
+before building, and against the strong, directly-applicable precedent
+already established there and in `packages/tenancy/src/agency-
+rollup.ts`'s own header comment ("does not take on a new dependency on
+`@ai-revenue-os/crm` merely to reuse [something]... not guessed at now"
+— cited, not re-derived). No identification logic exists anywhere in
+this package — `identified_contact_id` is never referenced in any
+`INSERT` statement it issues, structurally, not by convention.
+
+**Public API**: `checkCookieTrackingConsent`, `resolveOrCreateVisitor`,
+`resolveOrCreateVisitorSession`, `appendVisitorEvent`, and the one
+atomic composition, `ingestTrackingEvent` — mirroring `packages/crm`'s
+established `(ctx: RequestContext & { organizationId: string }, input,
+existingClient?: PoolClient)` / `runInClientOrTransaction` convention
+exactly, not a new shape invented for this package.
+
+**Atomic ingestion**: `ingestTrackingEvent` runs entirely inside one
+`withTenantContext` transaction. Order: (1) re-check `tracking_sites`
+(`id` + `organization_id` match + `revoked_at is null`) — the TOCTOU
+defense against revocation happening between 3.1C's future `resolve_
+tracking_site()` call and this write; if invalid, `{ accepted: false,
+reason: "tracking_site_revoked" }`, indistinguishable whether the site
+is missing, belongs to a different organization, or is genuinely
+revoked; (2) `checkCookieTrackingConsent` via the 3.1B-prerequisite
+`check_visitor_cookie_tracking_consent()` function — never a direct
+`consent_records` read; if not granted, `{ accepted: false, reason:
+"consent_not_granted" }`, indistinguishable between absent and withdrawn;
+(3)-(5) resolve/create visitor, resolve/create session, append event,
+all on the same `PoolClient`. `packages/intelligence` deliberately does
+**not** call `resolve_tracking_site()` itself — that pre-tenant
+credential resolution remains 3.1C's own boundary responsibility;
+`organizationId`/`trackingSiteId` arrive already trusted.
+
+**Visitor semantics**: a single `INSERT ... ON CONFLICT (organization_id,
+anonymous_id) DO UPDATE SET last_seen_at = now() RETURNING *` — race-safe
+by Postgres's own guarantee (the same `ON CONFLICT` idiom already
+precedented in `packages/database/src/events.ts`'s `event_deliveries`
+upsert). `first_seen_at` is never referenced in the `DO UPDATE` clause.
+
+**Session semantics**: `INSERT ... ON CONFLICT (organization_id,
+tracking_site_id, visitor_id, anonymous_session_id) DO UPDATE SET id =
+visitor_sessions.id RETURNING *` — the `DO UPDATE SET id = id` idiom
+makes `RETURNING` fire on the conflict path too (unlike `DO NOTHING`,
+which returns zero rows on conflict) while touching no actual data.
+Verified empirically before writing this function, not assumed:
+`visitor_sessions` has zero triggers, and a direct conflict-path round
+trip confirmed every session-start attribution column (`referrer`,
+`utm_*`, `landing_page`, `device_type`) survives byte-for-byte unchanged
+across a repeat call. `ended_at` is never referenced anywhere in this
+package — remains untouched/null, no timeout or expiration logic
+invented.
+
+**Event semantics**: `eventType` validated against `pageview`/
+`form_submit`/`click` in application code before any query, mirroring
+`packages/crm`'s own domain-level-rejection-ahead-of-the-DB-CHECK
+convention. `occurredAt` has no input field at all — always
+database-assigned. `metadata` defaults to `{}`; no payload-size
+enforcement (an HTTP/3.1C-boundary concern).
+
+**Error/result model**: `IntelligenceError` base class +
+`InvalidEventTypeError`/`InvalidSessionRelationshipError`, mirroring
+`packages/crm`'s `CrmError` family — no `ApiErrorCode`, no
+`NextResponse`, no HTTP coupling anywhere in this package (structurally
+tested, not just asserted). Consent-absent and tracking-site-revoked are
+deliberately **not exceptions** — `IngestResult`'s discriminated union
+represents them as data, mirroring `packages/compliance`'s own
+`previewUserErasure`/`previewContactErasure` precedent for an expected
+"cannot proceed" outcome (`{ canProceed, blockerReason }`), re-verified
+against that file directly before choosing this shape, not assumed.
+
+**A genuine finding, resolved during implementation, not hidden**: the
+first version of the atomicity/failure-injection test used a DDL-based
+chaos trigger on `visitor_events`, mirroring `packages/compliance`'s own
+`contact-erasure.test.ts` convention. Under real `turbo run test`
+concurrent load across all 8 packages, this reproducibly caused
+`error: deadlock detected` — `DROP TRIGGER`/`DROP FUNCTION` require an
+`ACCESS EXCLUSIVE` lock on `visitor_events`, which can genuinely
+deadlock against an ordinary concurrent `INSERT` into that same table
+from a sibling test file (this package's own `concurrency.test.ts`/
+`ingest.test.ts` both insert into it, and vitest parallelizes test files
+within one package by default). Resolved by redesigning the test to use
+a real, already-existing constraint violation (a session belonging to a
+different organization, rejected by `visitor_events_session_org_fk`)
+instead of any DDL at all — no table-level lock, no deadlock surface,
+and arguably a more representative failure mode than a synthetic one.
+Verified clean across two consecutive full, fresh, 8-package concurrent
+`turbo run test` executions after the fix.
+
+**Validation**: full monorepo **2,163/2,163** tests passing across all 8
+packages (database 615, auth 381, ui 39, compliance 39, crm 310, tenancy
+46, web 688, **intelligence 45** — new) — a monotonic increase from the
+Milestone 3.1B database-prerequisite baseline of 2,118. `pnpm lint`/
+`typecheck`/`build` clean across all 8 packages. No migration created,
+no RLS/grant modified, no `auth`/`crm`/`compliance`/`web` dependency
+added, no HTTP route, no n8n code, anywhere in this sub-phase.
+
+**Milestone 3.1B: database prerequisites and domain layer both
+complete.** `packages/intelligence` exists and is fully tested. 3.1C
+(public ingestion + consent-record endpoints, rate limiting) and 3.1D
+(tracking script) remain unbuilt — no route/endpoint/script/n8n code
+exists anywhere in this repository as of this section. Milestone 3.1
+overall remains **IN PROGRESS**.
 
 ---
 
