@@ -1,0 +1,27 @@
+-- Milestone 3.1C-A: RLS for rate_limit_counters -- companion to the
+-- schema migration, matching the established schema-then-RLS precedent
+-- (20260812120000/20260812120100, 20260820090000/20260820090100, etc.).
+--
+-- Deliberately different from every other RLS migration in this
+-- repository: ZERO policies, ZERO grants to authenticated or anon. This
+-- table has no legitimate staff-facing use case at all (unlike
+-- tracking_sites, which staff genuinely need to manage later) -- the
+-- ONLY access path, ever, is check_tracking_rate_limit() (companion
+-- function migration), a narrow SECURITY DEFINER function that bypasses
+-- RLS via its owner's privilege, never via a table-level grant.
+--
+-- With RLS enabled and no policy defined at all, Postgres's own default
+-- is deny-all for every role that does not own the table or hold
+-- BYPASSRLS -- so even in the hypothetical case a grant existed, RLS
+-- alone would already block direct access; independently, since no
+-- grant exists at all, the ACL layer alone already blocks access before
+-- RLS is ever evaluated. Two independent, stacked blocks, not one.
+--
+-- No existing default privileges are weakened by this migration --
+-- TRUNCATE/REFERENCES/TRIGGER and every ordinary DML privilege remain
+-- denied to authenticated/anon by the M1.9 default-privilege hardening
+-- (20260811100000/20260811110000, IN SCHEMA public) for every table
+-- created after those migrations, including this one -- no explicit
+-- revoke needed here, and no explicit grant is added either.
+
+alter table public.rate_limit_counters enable row level security;
