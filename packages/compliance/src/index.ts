@@ -6,6 +6,7 @@ export {
   type ConsentType,
   type ConsentStatus,
 } from "./consent";
+export { recordVisitorCookieTrackingConsent, type TrackingConsentStatus } from "./tracking-consent";
 export {
   fileDataSubjectRequest,
   getDataSubjectRequestById,
