@@ -14,6 +14,7 @@
     "@ai-revenue-os/compliance": "workspace:*",
     "@ai-revenue-os/crm": "workspace:*",
     "@ai-revenue-os/database": "workspace:*",
+    "@ai-revenue-os/intelligence": "workspace:*",
     "@ai-revenue-os/tenancy": "workspace:*",
     "@ai-revenue-os/ui": "workspace:*",
     "@sentry/nextjs": "^10.70.0",

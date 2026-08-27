@@ -40,6 +40,9 @@ importers:
       '@ai-revenue-os/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@ai-revenue-os/intelligence':
+        specifier: workspace:*
+        version: link:../../packages/intelligence
       '@ai-revenue-os/tenancy':
         specifier: workspace:*
         version: link:../../packages/tenancy
