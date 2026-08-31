@@ -496,3 +496,101 @@ milestone began, not discovered mid-implementation.
   audits, to contain zero remaining stale or contradictory statements
   about the error envelope, idempotency, or UUID-hardening conventions.
 - **Milestone 2.5 status: PASS — CLOSED** (`docs/13-Technical-Design-Review.md` "Milestone 2.5 — Overall Closeout").
+
+## Milestone 3.1 — Website Intelligence: Tracking Script + Ingestion Endpoint
+
+**Added**
+- `tracking_sites`/`website_visitors`/`visitor_sessions`/`visitor_events`
+  schema (3.1A) — `tracking_sites.id` is the intentionally public,
+  non-secret site key; `resolve_tracking_site()` resolves it to an
+  `organization_id` with no `auth.uid()` guard, by design, since a public
+  tracking beacon has no authenticated identity to check.
+- `packages/intelligence` (3.1B) — `ingestTrackingEvent`, the one atomic
+  ingestion transaction (TOCTOU-safe site re-check → consent check →
+  resolve/create visitor → resolve/create session → append event), plus
+  the `check_visitor_cookie_tracking_consent()` database prerequisite and
+  `visitor_sessions.anonymous_session_id` (client-generated correlation
+  UUID, never an authorization credential).
+- `rate_limit_counters` + `check_tracking_rate_limit()` (atomic
+  fixed-window, opaque bucket-hash keyed) and
+  `record_visitor_cookie_tracking_consent()` (site-key-scoped, append-only
+  consent write) — the 3.1C-A database prerequisites for the public HTTP
+  surface below.
+- `packages/auth`'s `resolveOrganizationContextForTrackingSite`,
+  `packages/compliance`'s `recordVisitorCookieTrackingConsent`, and
+  `apps/web/app/track/_shared/rate-limit.ts` (3.1C-B) — thin wrappers
+  connecting the database prerequisites to application code.
+- `POST /track/collect`, `POST /track/consent` (3.1C-C) — same-origin
+  public routes (not a separate `track.<platform-domain>` subdomain),
+  non-oracle `204` responses, closed 4-code error vocabulary, CORS-open
+  with no credentials, rate-limited across three independent dimensions
+  (`anonymous_id`/source IP/resolved tracking site).
+- `GET /track/script` (3.1D) — the browser tracking script itself, a
+  fixed, tenant-independent, hand-authored standalone-JavaScript payload
+  (no bundler, zero new dependency). Public API: `window.
+  aiRevenueOsTracker.consent(status)` / `.track(eventType, fields?)`.
+  Identity (`anonymousId`/`anonymousSessionId`) is memory-only before
+  consent, persisted to namespaced `localStorage`/`sessionStorage` keys
+  only after an explicit grant, cleared on withdrawal, never reused on a
+  later re-grant. Automatic event capture is `pageview` only —
+  `click`/`form_submit` are explicit-only, with no automatic DOM/form
+  scraping anywhere in the script. `url`/`referrer`/`landingPage` are
+  reduced to `origin + pathname` before transmission; only `utm_source`/
+  `utm_medium`/`utm_campaign` are ever captured. Every request uses
+  `credentials: "omit"` — no cookies. Platform origin for every network
+  call is derived exclusively from the executing `<script>` element's own
+  `src`, never the host page's origin. No consent-banner/CMP UI is part
+  of this milestone's scope.
+
+**Fixed**
+- 3.1C-A: the rate-limit function's opportunistic cleanup had no upper
+  bound on `p_window_seconds`, letting the currently-active window's own
+  row be deleted mid-window for a sufficiently long window. Bounded to
+  the same 86400-second horizon as the cleanup's own retention threshold,
+  before commit.
+- 3.1C-C: the source-IP resolver accepted any non-empty header value as
+  its own distinct rate-limit bucket identifier, with no actual IP-shape
+  validation. Fixed using Node's built-in `node:net isIP()` (zero new
+  dependency) — a malformed or missing value now collapses to the fixed
+  `"unknown"` bucket.
+- `docs/04-API-Architecture.md`'s original design (a separate `track.
+  <platform-domain>` subdomain, consent accepted inline in the ingestion
+  payload) was superseded during this milestone's Approved Architecture
+  decision (same-origin routes, consent as a structurally separate call)
+  — corrected in that document at this milestone's closeout, along with
+  `docs/06-n8n-Workflow-Architecture.md`'s stale description of ingestion
+  as n8n-queued (it is direct and synchronous, per Decision B).
+
+**Known gaps, explicitly deferred (not oversights)**
+- Visitor identification (matching an anonymous visitor to a known
+  `contacts` row), n8n-mediated event processing, and lead scoring remain
+  entirely unbuilt — Milestones 3.2/3.3/3.4. `website_visitors.
+  identified_contact_id` is schema-ready and unpopulated by any code path
+  in this milestone.
+- No `identify()`/visitor-profile/trait API exists on the tracking
+  script — deliberately out of this milestone's scope, reserved for 3.2.
+- No consent-banner/CMP UI ships as part of this milestone — the
+  installing customer's own site/CMP is responsible for calling the
+  script's `consent()` API.
+- The tracking script's `Retry-After` handling parses only the
+  delta-seconds form, not the HTTP date form — falls back to its safe
+  60-second default for a date-form value rather than parsing it.
+
+**Closeout — final validation**
+- Full monorepo **2,517/2,517** tests passing across all 8 packages (ui
+  39, database 674, intelligence 45, auth 390, compliance 51, tenancy 46,
+  crm 310, web 962) — a monotonic increase from the Milestone 2.5
+  baseline, `pnpm lint`/`typecheck`/`build` clean, zero RLS/grant
+  regression.
+- Each sub-phase (3.1A, 3.1B, 3.1C-A, 3.1C-B, 3.1C-C, 3.1D) underwent its
+  own independent, adversarial final acceptance audit before being
+  committed and pushed, following this repository's standard audit →
+  implement → final acceptance audit → commit → push discipline. No
+  browser/staging verification was performed or is claimed for this
+  milestone — 3.1C-C/3.1D's real HTTP/browser-shaped behavior was
+  verified via real Postgres-backed route tests and Node `vm`-sandboxed
+  execution of the exact served script bytes.
+- Two genuine security defects were found and fixed *before* commit
+  rather than shipped and patched later (see **Fixed** above) — both
+  disclosed, neither silently corrected.
+- **Milestone 3.1 status: PASS — CLOSED** (`docs/13-Technical-Design-Review.md` "Milestone 3.1 — Overall Closeout").

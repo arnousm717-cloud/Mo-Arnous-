@@ -3911,19 +3911,21 @@ Script + Ingestion Endpoint) is next — see
 
 ## Milestone 3.1 — Website Intelligence: Tracking Script + Ingestion Endpoint
 
-**Status: IN PROGRESS — not closed.** Sub-phase 3.1A (schema +
-tenant-resolution mechanism) and 3.1B (database prerequisites +
-domain layer, `packages/intelligence`) are complete as of this section.
-3.1C (public ingestion + consent-record endpoints, rate limiting) and
-3.1D (tracking script, site-key exposure) remain unbuilt. No tracking
-script, ingestion endpoint, consent-record endpoint, rate limiting, or
-`GET /api/v1/visitors` exists yet. No visitor identification exists
-either (Milestone 3.2, not yet started). No n8n integration exists in
-this milestone at all (deliberately — Milestone 3.3 is the first n8n
-workflow, per `docs/12-Implementation-Milestones.md`'s Phase 3 map). No
-browser/staging verification is claimed for this milestone — 3.1A is
-schema-only and 3.1B is a domain-layer package with no route or UI of
-its own; neither has a user-facing surface to verify.
+**Status: COMPLETE — CLOSED.** All six sub-phases shipped: 3.1A (schema +
+tenant-resolution mechanism), 3.1B (database prerequisites + domain
+layer, `packages/intelligence`), 3.1C-A (rate-limit/consent-write
+database prerequisites), 3.1C-B (domain/context wrappers), 3.1C-C
+(public `/track/collect`/`/track/consent` HTTP routes), and 3.1D (the
+`GET /track/script` browser tracking script). See "Milestone 3.1 —
+Overall Closeout" below for final validation, and the 3.1C-A/3.1C-B/
+3.1C-C/3.1D sections for what each sub-phase shipped. Visitor
+identification (Milestone 3.2, not yet started) and n8n integration
+(Milestone 3.3, the first n8n workflow, per `docs/12-Implementation-
+Milestones.md`'s Phase 3 map) remain deliberately out of this milestone's
+scope. No browser/staging verification is claimed for this milestone —
+see the Overall Closeout section for exactly what verification method
+was used instead for the sub-phases with a real HTTP/browser-facing
+surface.
 
 ### Milestone 3.1 — Approved Architecture
 
@@ -3951,7 +3953,9 @@ apply to 3.1/3.2, which precede Milestone 3.3 (the first n8n workflow).
 `docs/06` §3 should be corrected/annotated to make this explicit once
 3.1C's ingestion endpoint actually ships and the discrepancy becomes
 user-facing; not corrected in 3.1A itself, since nothing in 3.1A
-contradicts it yet (no ingestion behavior exists at all).
+contradicts it yet (no ingestion behavior exists at all). **Done at
+Milestone 3.1's overall closeout** — `docs/06` §3 now carries an explicit
+current-state note.
 
 **Consent policy — universal strict default.** `cookie_tracking` consent
 must be `granted` before any `website_visitors`/`visitor_sessions`/
@@ -4217,9 +4221,11 @@ scope). The domain layer itself is covered in the next subsection.
 
 ### Milestone 3.1B — Domain Layer (`packages/intelligence`)
 
-**Status: IN PROGRESS overall (Milestone 3.1) — the domain layer is now
-built, but no HTTP route, public endpoint, tracking script, rate
-limiting, or n8n integration exists anywhere in this repository.** 3.1C
+**Status at this sub-phase's own close (historical — see "Milestone 3.1 —
+Overall Closeout" below for final status): IN PROGRESS overall (Milestone
+3.1) — the domain layer is now built, but no HTTP route, public
+endpoint, tracking script, rate limiting, or n8n integration exists
+anywhere in this repository as of this point in the milestone.** 3.1C
 (public ingestion + consent-record endpoints, rate limiting) and 3.1D
 (tracking script) remain unbuilt. No browser/staging verification is
 claimed — this sub-phase has no user-facing surface.
@@ -4323,11 +4329,138 @@ no RLS/grant modified, no `auth`/`crm`/`compliance`/`web` dependency
 added, no HTTP route, no n8n code, anywhere in this sub-phase.
 
 **Milestone 3.1B: database prerequisites and domain layer both
-complete.** `packages/intelligence` exists and is fully tested. 3.1C
-(public ingestion + consent-record endpoints, rate limiting) and 3.1D
-(tracking script) remain unbuilt — no route/endpoint/script/n8n code
-exists anywhere in this repository as of this section. Milestone 3.1
-overall remains **IN PROGRESS**.
+complete.** `packages/intelligence` exists and is fully tested. As of
+this section, 3.1C (public ingestion + consent-record endpoints, rate
+limiting) and 3.1D (tracking script) remained unbuilt, and Milestone 3.1
+overall remained IN PROGRESS. **Superseded below** — 3.1C-A through 3.1D
+subsequently shipped; see the sections immediately following and the
+"Milestone 3.1 — Overall Closeout" section for the final, current status.
+
+### Milestone 3.1C-A — Tracking Security Prerequisites
+
+Two new `SECURITY DEFINER` database objects, closing the two remaining
+gaps 3.1C's own pre-implementation audit identified before any HTTP route
+could be built: `rate_limit_counters` (RLS enabled, zero policies, zero
+grants — access exists solely through the function below) plus
+`check_tracking_rate_limit(p_bucket_hash, p_window_seconds, p_limit)
+returns boolean` (atomic fixed-window check-and-increment, one function
+serving every rate-limit dimension via an opaque, application-computed
+bucket hash — never a raw identifier), and `record_visitor_cookie_
+tracking_consent(p_site_key, p_anonymous_id, p_status) returns boolean`
+(resolves `organization_id` internally from `tracking_sites`, mirroring
+`resolve_tracking_site()`'s own precedent, making cross-tenant forgery
+structurally impossible rather than merely checked; append-only). Both
+`EXECUTE`-granted to `authenticated` only, matching every prior tracking
+function's privilege model. **A genuine security defect was found and
+fixed before commit**: the rate-limit function's opportunistic cleanup
+initially had no upper bound on `p_window_seconds`, which could delete
+the currently-active window's own row mid-window for a sufficiently long
+window; fixed by bounding it to the same 86400-second horizon as the
+cleanup's own retention threshold. Committed `7047911`.
+
+### Milestone 3.1C-B — Domain/Context Wrappers
+
+Thin wrappers connecting the 3.1C-A database prerequisites to
+application code, each following an already-established package
+convention rather than inventing a new one: `packages/auth`'s
+`resolveOrganizationContextForTrackingSite(siteKey)` (mirrors
+`resolveOrganizationContextForUser`), `packages/compliance`'s
+`recordVisitorCookieTrackingConsent(siteKey, anonymousId, status,
+existingClient?)`, and `apps/web/app/track/_shared/rate-limit.ts`'s
+`checkTrackingRateLimit`/`hashTrackingRateLimitBucket` (SHA-256 bucket
+hashing, fixed 60-second window, a small hardcoded per-surface/dimension
+limit table). Committed `2df8028`.
+
+### Milestone 3.1C-C — Public Tracking HTTP Routes
+
+`POST /track/collect` and `POST /track/consent` — same-origin `apps/web`
+Route Handlers, not a separate `track.<platform-domain>` subdomain (a
+deliberate divergence from `04-API-Architecture.md`'s original design,
+corrected there at this milestone's closeout). Orchestration: bounded
+body read → validate/canonicalize → derive trusted source IP → IP limit
+→ anon limit → resolve tracking site → site limit (using the *resolved*
+`trackingSiteId`, never the raw `siteKey`) → the one domain call → a
+uniform `204` (persisted, no-consent, revoked, and nonexistent-site
+outcomes are all identical — no tenant-state oracle). Closed 4-code error
+vocabulary (`400`/`413`/`429`/`500`), CORS-open with no credentials.
+**A genuine security defect was found and fixed before commit**: the
+initial source-IP resolver accepted any non-empty header value as a
+rate-limit bucket identifier with no actual IP-shape check, letting
+arbitrary strings each become their own persisted bucket; fixed using
+Node's built-in `node:net isIP()` (zero new dependency) — a malformed or
+missing value now collapses to the fixed `"unknown"` bucket, never its
+own distinct identifier. Committed `ab5aaf6`.
+
+### Milestone 3.1D — Browser Tracking Script
+
+`GET /track/script` serves a fixed, tenant-independent, hand-authored
+standalone-JavaScript tracker (no bundler, zero new dependency) as a
+plain string constant — no DB access, no auth, no secret. Installation:
+`<script src="https://<platform-domain>/track/script"
+data-site-key="<tracking_sites.id>" async>`; the global
+`window.aiRevenueOsTracker` exposes exactly `consent(status)` and
+`track(eventType, fields?)`. Key design resolutions, each previously
+flagged as unresolved by the 3.1D pre-implementation audit and settled
+before implementation began: `anonymousId`/`anonymousSessionId` are
+memory-only before consent, persisted to `localStorage`/`sessionStorage`
+respectively (namespaced keys, never generic names) only after an
+explicit grant, cleared on withdrawal, and never reused on a later
+re-grant; automatic event capture is `pageview` only — `click`/
+`form_submit` are reachable exclusively through the explicit `track()`
+call, with no DOM/form scraping of any kind anywhere in the script;
+`url`/`referrer`/`landingPage` are reduced to `origin + pathname` before
+transmission (query strings and fragments are never read into any
+variable, let alone transmitted); only `utm_source`/`utm_medium`/
+`utm_campaign` are ever captured from a query string; every request uses
+`credentials: "omit"` (no cookies, ever); no consent-banner/CMP UI is
+part of 3.1D's scope (the installing customer's own site/CMP calls the
+script's `consent()` API); platform origin for every network call is
+derived exclusively from the executing `<script>` element's own `src`,
+never the host page's origin, so an embed on an arbitrary third-party
+site cannot be tricked into calling that site's own origin instead.
+Tested via `node:vm` sandbox execution of the exact served script
+(byte-identical proof against the live `GET /track/script` response, not
+only the source constant) with hand-written browser-API stubs — no
+jsdom/happy-dom, no new dependency. Committed and pushed `a023cd9`.
+
+### Milestone 3.1 — Overall Closeout
+
+**Automated verification (this repository's own test suite, re-run at
+closeout, working tree clean, HEAD `a023cd9`).** `pnpm lint`/`typecheck`/
+`build` clean across all 8 packages; `pnpm test` **2,517/2,517 passing**
+across all 8 packages (ui 39, database 674, intelligence 45, auth 390,
+compliance 51, tenancy 46, crm 310, web 962) — a monotonic increase
+across every sub-phase from the Milestone 3.1B baseline of 2,163, never a
+decrease; zero database schema regression, migration-safety gate clean.
+
+**No browser/staging verification was performed for this milestone, and
+none is claimed** — consistent with this repository's standing
+discipline of never fabricating staging/browser verification. 3.1C-C/
+3.1D's real HTTP/browser-shaped behavior was instead verified via real
+Postgres-backed route tests and Node `vm`-sandboxed execution of the
+exact served script bytes, not a live browser session.
+
+**Milestone 3.1: PASS — CLOSED.** All six sub-phases (3.1A schema,
+3.1B domain layer + database prerequisites for consent/session identity,
+3.1C-A rate-limit/consent-write database prerequisites, 3.1C-B domain/
+context wrappers, 3.1C-C public HTTP routes, 3.1D browser script) shipped,
+each following the same audit → implement → final acceptance audit →
+commit → push discipline as every prior milestone in this repository. Two
+genuine security defects were found and fixed *before* commit rather than
+shipped and patched later: 3.1C-A's unbounded rate-limit cleanup window,
+and 3.1C-C's unvalidated source-IP bucket identifier — both disclosed
+above, not silently corrected. One disclosed, deliberate architectural
+divergence from the original design intent: tracking endpoints ship
+same-origin on `apps/web` rather than on a separate `track.<platform-
+domain>` subdomain, and consent recording is a structurally separate call
+from event ingestion rather than an inline field — both corrected in
+`docs/04-API-Architecture.md` at this closeout. Visitor identification
+(Milestone 3.2), n8n-mediated processing (Milestone 3.3), and any
+`identify()`/visitor-profile API remain explicitly unbuilt and out of
+scope — 3.1D's own public API deliberately exposes nothing beyond
+`consent()`/`track()`. Phase 2 — CRM and Milestone 3.1 — Website
+Intelligence: Tracking Script + Ingestion Endpoint are now both fully
+delivered; Milestone 3.2 — Visitor Identification has not started.
 
 ---
 
