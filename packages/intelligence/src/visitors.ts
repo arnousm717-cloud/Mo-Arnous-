@@ -16,6 +16,8 @@ export interface WebsiteVisitor {
   identifiedContactId: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
+  /** Milestone 3.2A/F. Non-null once the contact this visitor was linked to has been GDPR-erased — permanently blocks any future identification of this row. Unused by ingestTrackingEvent (3.1C), purely additive. */
+  identificationSuppressedAt: string | null;
 }
 
 interface WebsiteVisitorRow {
@@ -25,6 +27,7 @@ interface WebsiteVisitorRow {
   identified_contact_id: string | null;
   first_seen_at: string;
   last_seen_at: string;
+  identification_suppressed_at: string | null;
 }
 
 function mapVisitorRow(row: WebsiteVisitorRow): WebsiteVisitor {
@@ -35,6 +38,7 @@ function mapVisitorRow(row: WebsiteVisitorRow): WebsiteVisitor {
     identifiedContactId: row.identified_contact_id,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
+    identificationSuppressedAt: row.identification_suppressed_at,
   };
 }
 
@@ -58,7 +62,7 @@ export async function resolveOrCreateVisitor(
        values ($1, $2)
        on conflict (organization_id, anonymous_id)
        do update set last_seen_at = now()
-       returning id, organization_id, anonymous_id, identified_contact_id, first_seen_at, last_seen_at`,
+       returning id, organization_id, anonymous_id, identified_contact_id, first_seen_at, last_seen_at, identification_suppressed_at`,
       [ctx.organizationId, anonymousId],
     );
     const row = r.rows[0];

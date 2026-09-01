@@ -53,19 +53,23 @@ describe("packages/intelligence architecture boundaries", () => {
     }
   });
 
-  it("package.json declares exactly one runtime dependency: @ai-revenue-os/database", async () => {
+  // Milestone 3.2C: @ai-revenue-os/crm is now a real dependency — this is
+  // the exact, previously-anticipated trigger docs/02-Software-
+  // Architecture.md's own package-table row named explicitly ("the crm
+  // dependency below remains this package's documented eventual scope,
+  // for Milestone 3.2's identification work, once it actually needs it"):
+  // getContactByEmail is the one and only reason this package now needs
+  // it. Updated here deliberately, not silently — this test's own
+  // original comment/design anticipated exactly this change, it was
+  // never meant to permanently forbid it.
+  it("package.json declares exactly the two runtime dependencies identification actually needs: @ai-revenue-os/crm, @ai-revenue-os/database", async () => {
     const pkg = JSON.parse(await readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"));
-    expect(Object.keys(pkg.dependencies)).toEqual(["@ai-revenue-os/database"]);
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(["@ai-revenue-os/crm", "@ai-revenue-os/database"]);
   });
 
-  it("no source file imports @ai-revenue-os/crm, @ai-revenue-os/auth, @ai-revenue-os/compliance, or @ai-revenue-os/web", async () => {
+  it("no source file imports @ai-revenue-os/auth, @ai-revenue-os/compliance, or @ai-revenue-os/web", async () => {
     const files = await readSourceFiles();
-    const forbidden = [
-      "@ai-revenue-os/crm",
-      "@ai-revenue-os/auth",
-      "@ai-revenue-os/compliance",
-      "@ai-revenue-os/web",
-    ];
+    const forbidden = ["@ai-revenue-os/auth", "@ai-revenue-os/compliance", "@ai-revenue-os/web"];
     for (const { file, content } of files) {
       for (const dep of forbidden) {
         expect(content, `${file} must not import ${dep}`).not.toContain(dep);

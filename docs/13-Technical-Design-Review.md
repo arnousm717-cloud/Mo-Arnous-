@@ -3919,9 +3919,10 @@ database prerequisites), 3.1C-B (domain/context wrappers), 3.1C-C
 `GET /track/script` browser tracking script). See "Milestone 3.1 —
 Overall Closeout" below for final validation, and the 3.1C-A/3.1C-B/
 3.1C-C/3.1D sections for what each sub-phase shipped. Visitor
-identification (Milestone 3.2, not yet started) and n8n integration
-(Milestone 3.3, the first n8n workflow, per `docs/12-Implementation-
-Milestones.md`'s Phase 3 map) remain deliberately out of this milestone's
+identification (Milestone 3.2, delivered separately — see "Milestone
+3.2 — Overall Closeout" below) and n8n integration (Milestone 3.3, the
+first n8n workflow, per `docs/12-Implementation-Milestones.md`'s Phase 3
+map, not yet started) remained deliberately out of this milestone's own
 scope. No browser/staging verification is claimed for this milestone —
 see the Overall Closeout section for exactly what verification method
 was used instead for the sub-phases with a real HTTP/browser-facing
@@ -4456,11 +4457,212 @@ domain>` subdomain, and consent recording is a structurally separate call
 from event ingestion rather than an inline field — both corrected in
 `docs/04-API-Architecture.md` at this closeout. Visitor identification
 (Milestone 3.2), n8n-mediated processing (Milestone 3.3), and any
-`identify()`/visitor-profile API remain explicitly unbuilt and out of
-scope — 3.1D's own public API deliberately exposes nothing beyond
-`consent()`/`track()`. Phase 2 — CRM and Milestone 3.1 — Website
-Intelligence: Tracking Script + Ingestion Endpoint are now both fully
-delivered; Milestone 3.2 — Visitor Identification has not started.
+`identify()`/visitor-profile API were, as of this milestone's own close,
+explicitly unbuilt and out of scope — 3.1D's own public API at the time
+deliberately exposed nothing beyond `consent()`/`track()`. Phase 2 — CRM
+and Milestone 3.1 — Website Intelligence: Tracking Script + Ingestion
+Endpoint are now both fully delivered. **Milestone 3.2 — Visitor
+Identification has since shipped** — see "Milestone 3.2 — Overall
+Closeout" below; 3.1D's browser script itself was extended with a third,
+narrowly-scoped `identify(assertion)` method as part of that later
+milestone (3.2E), not this one.
+
+## Milestone 3.2 — Overall Closeout
+
+**Milestone 3.2 — Website Intelligence: Visitor Identification.**
+**Status: COMPLETE — pending commit.** Delivered as sub-phases 3.2A
+through 3.2G (schema, RLS, permission sync, Ed25519 assertion
+verification/key management, the atomic `identifyVisitor` transaction,
+the public `POST /track/identify` route, the browser `identify()`
+method, and consent-withdrawal/erasure anti-relink), followed by a Final
+Implementation Acceptance Audit (BLOCKER + HIGH found), a remediation
+pass, and a Second Final Implementation Acceptance Audit (GO). As of
+this closeout the working tree is clean against `origin/main`
+(`c3d786261d2b6f059921030228b35e5846959995`) with the milestone's 37
+files staged as untracked/modified — **not yet committed or pushed**.
+
+### Architecture
+
+The Milestone 3.2 Design Resolution Report originally accepted an
+HMAC/shared-secret signing model, assuming a reusable encrypted-secret-
+storage primitive it cited as existing precedent
+(`integration_connections.credentials_encrypted`). The mandatory Phase-0
+feasibility verification, performed before any implementation code was
+written, found **empirically** — via a direct repository-wide search,
+not inference from documentation — that `integration_connections` did
+not exist anywhere in the repository, and neither did the
+`/api/v1/api-keys` route also cited as precedent. Per the standing
+implementation instruction for that turn, this was reported as a
+blocker and **no workaround or substitute plaintext-storage mechanism
+was implemented** — the turn stopped without writing code.
+
+The architecture was then formally amended: **Ed25519 asymmetric
+signing**, via Node's built-in `node:crypto` only (zero new dependency).
+The customer's own trusted backend generates and permanently retains
+the Ed25519 private key; this platform never receives, generates,
+stores, logs, or transmits it under any circumstance. Only the
+corresponding public key is ever accepted, which requires no
+encryption-at-rest since a public key is not a secret. This removes the
+original design's entire reversible-secret-storage requirement by
+construction rather than by policy. See `docs/08-Security.md` §4.1 for
+the full trust-boundary and assertion-verification model, and
+`docs/04-API-Architecture.md` §2.7 for the shipped request/response
+contract.
+
+### Database (`docs/03-Database-Architecture.md` §2.3)
+
+- `website_visitors.identification_suppressed_at` (additive column,
+  `20260821090000`) — the erasure anti-relink flag; permanently set,
+  never cleared, once non-null.
+- `visitor_identifications` (new) — append-only identification
+  audit/replay-protection log; structural single-use `jti` enforcement
+  via tenant-scoped `UNIQUE (organization_id, token_jti)`; no email,
+  assertion contents, or raw evidence ever stored.
+- `tracking_site_public_keys` (new) — registered Ed25519 SPKI public
+  keys only, scoped `(organization_id, tracking_site_id)`; no private
+  key or symmetric secret of any kind.
+- `emit_visitor_identified_event(p_website_visitor_id uuid, p_contact_id
+  uuid) returns void` (`SECURITY DEFINER`) — the narrow transactional-
+  outbox write path for the `visitor.identified` event. **Hardened
+  during the Milestone 3.2 acceptance-audit remediation pass**: the
+  original version accepted `organization_id` as a third, entirely
+  caller-trusted parameter and performed no revalidation, meaning any
+  authenticated-role database caller — not only `identifyVisitor`'s own
+  call site — could invoke it directly with fabricated or cross-tenant
+  UUIDs and forge an outbox event. The hardened version accepts no
+  `organization_id` parameter at all — it derives it from
+  `website_visitors` and independently re-proves the visitor's current
+  `identified_contact_id` equals the supplied contact, and that the
+  contact belongs to the same organization, before inserting; any
+  mismatch is a silent no-op, never an exception.
+
+### Runtime
+
+`packages/auth`'s `tracking-identity-assertions`/`tracking-signing-keys`
+own the full verification chain (structural parse → claims shape →
+`aud`/`organizationId`/`anonymousId` binding → freshness → tenant/site-
+scoped `kid` lookup → Ed25519 signature) behind one composed entry
+point, `verifyIdentityAssertion`, returning `null` — never a
+distinguishable reason — on any failure. `packages/intelligence`'s
+`identifyVisitor` is the one atomic transaction `POST /track/identify`
+calls afterward: re-checks the tracking site and live cookie-tracking
+consent, resolves-or-creates the visitor row, enforces the erasure-
+suppression guard, resolves the contact by the assertion's own email
+claim, applies the conflict policy (A→A idempotent; A→B rejected,
+leaving A's binding untouched), consumes the `jti`, updates
+`identified_contact_id`, and emits the outbox event — all inside one
+`withTenantContext` transaction. The A→B concurrency race is genuinely
+serialized by a real Postgres primitive, not scheduler luck:
+`resolveOrCreateVisitor`'s own `INSERT ... ON CONFLICT DO UPDATE`
+row-locks the visitor row for the full transaction, so a second
+concurrent request blocks until the first commits and then observes its
+already-committed binding — proven with 50 repeated `Promise.all` trials
+during the first acceptance audit, zero split-brain outcomes.
+
+**Replay handling** (hardened during remediation): both `visitor_
+identifications` INSERT paths — the normal `identified` path and the
+`rejected_conflict` path — share the identical `(organization_id,
+token_jti)` unique-constraint replay check. Before remediation, only the
+`identified` path caught the constraint violation; a jti already
+consumed by an earlier identification, replayed after the visitor was
+legitimately rebound to a different contact, hit the unguarded
+`rejected_conflict` path and threw an uncaught exception, which the HTTP
+layer only survived by returning `500` — a response distinguishable
+from the uniform `204` every other rejection produces, breaking the
+endpoint's own non-oracle design. Both paths now resolve identically to
+`{accepted: false, reason: "replayed_jti"}`, verified sequentially,
+concurrently, and end-to-end over real HTTP with a genuinely signed
+assertion.
+
+`POST /track/identify` and `aiRevenueOsTracker.identify(assertion)` are
+documented in full in `docs/04-API-Architecture.md` §2.7 — the public
+endpoint's strict allowlist, non-oracle rejection semantics, and
+four-dimension rate limiting; the browser method's opaque-relay,
+no-persistence, no-retry behavior.
+
+### Privacy / Security
+
+- **Consent fails closed**: identification requires a live, currently-
+  granted `cookie_tracking` consent, re-checked inside the identification
+  transaction itself — an otherwise-valid assertion is rejected without
+  one.
+- **Withdrawal atomically unlinks**: `POST /track/consent`'s withdrawal
+  path and `unlinkVisitorIdentityOnWithdrawal` share one transaction —
+  the consent-status change and the identity unlink either both land or
+  neither does. Reversible in principle; does not set `identification_
+  suppressed_at`.
+- **Erasure anti-relink is permanent**: `execute_contact_erasure()`
+  (extended 3.2F, additive `CREATE OR REPLACE`, the pre-existing
+  effective body left byte-identical) sets `identification_suppressed_at`
+  on every visitor identified to the contact being hard-erased, before
+  the contact row is deleted — proven end-to-end with a real GDPR
+  data-subject-request erasure, confirming a subsequently re-created
+  contact with the same email cannot re-identify the same visitor.
+- **No assertion/email/token persistence or logging** anywhere in the
+  identification path.
+- **Tenant isolation** is structural throughout — composite tenant-safe
+  FKs on both new tables, tenant/site-scoped `kid` lookup, and (post-
+  remediation) `organization_id`-free outbox emission — not merely RLS-
+  reliant at any point a `SECURITY DEFINER` function is involved.
+
+### Verification
+
+Two Final Implementation Acceptance Audits were performed. The first
+(read-only, adversarial) found one BLOCKER (`emit_visitor_identified_
+event`'s unvalidated parameters, above) and one HIGH (the conflict-path
+replay exception, above), plus one LOW (a stale RLS-migration comment
+claiming a `SECURITY DEFINER` read path for `tracking_site_public_keys`
+that was never actually implemented — corrected to describe the real
+ordinary-RLS read path) — verdict **NO-GO**, not fixed in that turn per
+its own explicit instruction. A remediation pass fixed exactly those
+three findings and added 12 new tests (8 hostile direct-SQL-invocation
+tests for the hardened outbox function, 3 replay-regression tests, 1
+HTTP-level end-to-end regression test) — not fixed elsewhere, no
+unrelated changes. The **Second Final Implementation Acceptance Audit**
+independently re-verified all three fixes from scratch (direct hostile
+SQL invocation as the real `authenticated` role, not the remediation's
+own test suite; an independent 30-call concurrent-replay probe with raw
+DB inspection; a full documentation-drift and RLS/grant re-check) and
+returned **GO**, with two informational-tier findings preserved rather
+than fixed (see below).
+
+- `pnpm turbo run test --force`: **2705/2705**, run twice (concurrency
+  is exercised), both fully green.
+- `pnpm lint` / `pnpm typecheck` / `pnpm build`: clean across all 9
+  packages.
+- Fresh `supabase db reset`: all 5 Milestone 3.2 migrations apply
+  cleanly, in order, from a fully torn-down local database — performed
+  three times across the two acceptance audits and the remediation pass.
+
+### Remaining Findings (preserved, not fixed this milestone)
+
+- **MEDIUM** — `emit_visitor_identified_event()` does not independently
+  check `website_visitors.identification_suppressed_at`. The current
+  production `identifyVisitor` flow already rejects a suppressed visitor
+  before any event emission is reached, so no currently-reachable
+  exploit exists — this is a defense-in-depth gap for a future or
+  direct caller, not a live vulnerability.
+- **LOW** — `emit_visitor_identified_event()` does not independently
+  require `contacts.deleted_at IS NULL`. A visitor currently, genuinely
+  bound to a contact that is later soft-deleted can still cause the
+  emitter to re-confirm that already-true binding; this cannot forge a
+  new or unrelated pairing.
+- **Informational** — the emitter has no event-level idempotency;
+  repeated legitimate direct calls for the same current binding can
+  create repeated `visitor.identified` events. Bounded in practice by
+  this codebase never exposing Postgres functions directly to browser
+  clients (no PostgREST/RPC surface) — reachable only by first-party
+  server-side code.
+- **Informational** — no dedicated HTTP-level test exists specifically
+  for a suppressed-visitor or an ordinary A→B-conflict rejection
+  producing `204`, though `handleIdentifyRequest`'s own structure
+  (no per-reason branching before the uniform `noContentResponse()`)
+  guarantees it regardless.
+
+**Milestone 3.2: PASS.** Visitor identification is live behind `POST
+/track/identify`; Milestone 3.3 (n8n-mediated lead enrichment, the first
+n8n workflow) remains explicitly unbuilt and out of scope — no consumer
+of the `visitor.identified` outbox event exists yet.
 
 ---
 

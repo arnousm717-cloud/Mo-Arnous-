@@ -8,6 +8,28 @@ export {
 } from "./request-context";
 export { resolveOrganizationContextForTrackingSite, type TrackingSiteContext } from "./tracking-context";
 export {
+  ASSERTION_ISSUER,
+  MAX_ASSERTION_LIFETIME_SECONDS,
+  CLOCK_SKEW_TOLERANCE_SECONDS,
+  MAX_ASSERTION_STRING_LENGTH,
+  parseCompactAssertion,
+  parseAndValidateClaims,
+  isAssertionCurrentlyValid,
+  isValidEd25519SpkiPublicKeyPem,
+  verifyAssertionSignature,
+  type IdentityAssertionClaims,
+} from "./tracking-identity-assertions";
+export {
+  registerTrackingSitePublicKey,
+  listTrackingSitePublicKeys,
+  revokeTrackingSitePublicKey,
+  resolveActiveTrackingSitePublicKey,
+  verifyIdentityAssertion,
+  InvalidPublicKeyError,
+  type RegisteredTrackingSitePublicKey,
+  type VerifyIdentityAssertionInput,
+} from "./tracking-signing-keys";
+export {
   resolveAgencyRequestContext,
   resolveAgencyContextForUser,
   type ResolvedAgencyContext,

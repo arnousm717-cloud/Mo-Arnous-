@@ -594,3 +594,129 @@ milestone began, not discovered mid-implementation.
   rather than shipped and patched later (see **Fixed** above) — both
   disclosed, neither silently corrected.
 - **Milestone 3.1 status: PASS — CLOSED** (`docs/13-Technical-Design-Review.md` "Milestone 3.1 — Overall Closeout").
+
+## Milestone 3.2 — Website Intelligence: Visitor Identification
+
+**Added**
+- Visitor identification, live behind `POST /track/identify` and the
+  browser tracking script's new `aiRevenueOsTracker.identify(assertion)`
+  method (3.2E) — matches an anonymous website visitor to a known
+  `contacts` row, the gap Milestone 3.1 explicitly left open.
+- **Trust model: Ed25519 asymmetric signing, via Node's built-in
+  `node:crypto` only, zero new dependency.** The customer's own trusted
+  backend generates and permanently retains the private key; this
+  platform only ever receives, verifies, and stores the corresponding
+  public key. **This milestone does not use HMAC or any shared/reusable
+  signing secret** — an HMAC/shared-secret design was considered
+  earlier in this milestone's own design process and was never
+  implemented, once a Phase-0 feasibility check found the
+  encryption-at-rest primitive that design assumed did not actually
+  exist in this repository (see **Fixed** below). Assertions use a
+  compact, non-JWT format (`base64url(claims) + "." + base64url(
+  signature)`, no `alg` header) — deliberately not JWT/JWS-compatible,
+  to avoid reproducing JWS's own algorithm-confusion attack surface for
+  a single-algorithm use case.
+- `visitor_identifications` (append-only identification audit/replay
+  log, tenant-scoped single-use `jti` via `UNIQUE (organization_id,
+  token_jti)`) and `tracking_site_public_keys` (registered Ed25519 SPKI
+  public keys only, never a private key) — new tables, 3.2A.
+- `website_visitors.identification_suppressed_at` — additive column,
+  the GDPR erasure anti-relink flag (3.2A/3.2F, see below).
+- Staff public-key management: `GET`/`POST /api/v1/tracking-sites/
+  {trackingSiteId}/public-keys`, `POST .../public-keys/{keyId}/revoke`
+  (3.2B) — session auth, new `tracking:manage-identity-keys` permission,
+  `org_admin` only.
+- `packages/auth`'s Ed25519 assertion parsing/claims validation/
+  signature verification and tenant/site-scoped key resolution (3.2B/
+  3.2C), and `packages/intelligence`'s `identifyVisitor` (3.2C) — the
+  one atomic transaction behind `/track/identify`: live consent
+  re-check, resolve-or-create visitor, erasure-suppression guard,
+  contact resolution by the assertion's own email claim, A→B conflict
+  policy, structural jti replay protection, and a `visitor.identified`
+  transactional-outbox emission, all in one transaction.
+- Consent-withdrawal identity unlink (3.2F) — withdrawing cookie-
+  tracking consent atomically clears an identified visitor's binding in
+  the same transaction as the consent-status write.
+- Contact-erasure anti-relink (3.2F) — a hard-erased contact's
+  previously-identified visitor(s) are permanently suppressed from any
+  future identification, to any contact, closing the gap where the
+  browser's continued possession of the same `anonymous_id` could
+  otherwise re-associate a hard-erased person's retained history with a
+  replacement contact. Additive `CREATE OR REPLACE` on
+  `execute_contact_erasure()` — the pre-existing effective body is
+  unchanged, only two new statements added.
+
+**Fixed**
+- **Architecture amendment, before any implementation code was written**:
+  the originally-accepted design cited `integration_connections.
+  credentials_encrypted` and `/api/v1/api-keys` as existing precedent
+  for a reversible-encrypted-secret HMAC signing model. A mandatory
+  Phase-0 feasibility check found, by direct repository search rather
+  than by assuming the documentation was current, that neither actually
+  existed. Per this repository's own standing discipline, this was
+  reported as a blocker and the turn stopped without writing any code —
+  no plaintext-secret workaround was substituted. The architecture was
+  then formally amended to Ed25519 asymmetric signing (see **Added**
+  above), which removes the reversible-secret requirement entirely by
+  construction.
+- **Found by the first Final Implementation Acceptance Audit, fixed in a
+  dedicated remediation pass, independently re-verified by a second
+  audit**:
+  - **BLOCKER** — `emit_visitor_identified_event()` (the `SECURITY
+    DEFINER` outbox-emission function) originally accepted
+    `organization_id` as a caller-trusted parameter with no
+    revalidation, meaning any authenticated-role database caller could
+    invoke it directly with fabricated or cross-tenant identifiers and
+    forge an outbox event for another tenant. Fixed by removing the
+    `organization_id` parameter entirely — it is now always derived
+    from `website_visitors`, with the visitor's current binding and
+    same-organization contact relationship independently re-proven
+    before every insert.
+  - **HIGH** — a signed assertion's `jti`, replayed after the visitor
+    had since been legitimately rebound to a different contact, could
+    hit an unguarded code path and throw an uncaught database exception,
+    surfacing as an HTTP `500` distinguishable from this endpoint's
+    otherwise-uniform `204` non-oracle response. Fixed by applying the
+    same replay-detection handling already used on the normal
+    identification path to the conflict-rejection path as well.
+  - **LOW** — a migration comment incorrectly described a `SECURITY
+    DEFINER` bypass-RLS read path for `tracking_site_public_keys` that
+    was never actually implemented; corrected to describe the real,
+    ordinary-RLS read path.
+
+**Known gaps, explicitly deferred (not oversights)**
+- `emit_visitor_identified_event()` does not independently re-check
+  `identification_suppressed_at` or `contacts.deleted_at` — the current
+  `identifyVisitor` flow already guarantees neither state is reachable
+  through it, so this is a defense-in-depth gap for a future/direct
+  caller, not a live vulnerability. Preserved, not fixed, at this
+  milestone's own explicit direction.
+- The outbox emitter has no event-level idempotency — a repeated direct
+  call for the same current binding creates a repeated
+  `visitor.identified` event. No consumer of this event exists yet
+  (that is Milestone 3.3's own scope), and this codebase never exposes
+  Postgres functions directly to browser clients.
+- n8n-mediated processing (Milestone 3.3, the first n8n workflow) and
+  any consumer of the `visitor.identified` outbox event remain entirely
+  unbuilt and out of this milestone's scope.
+
+**Closeout — final validation**
+- Full monorepo **2705/2705** tests passing across all 8 packages (ui
+  39, database 717, auth 457, compliance 51, crm 315, tenancy 46,
+  intelligence 73, web 1007) — run twice, both fully green (concurrency
+  is exercised by this milestone's own real `Promise.all`/`Promise.
+  allSettled` race tests, not simulated). `pnpm lint`/`typecheck`/
+  `build` clean across all 9 packages. Fresh `supabase db reset`
+  applies all five Milestone 3.2 migrations cleanly, in order, from a
+  fully torn-down local database.
+- Two independent, read-only, adversarial Final Implementation
+  Acceptance Audits were performed — the first found the BLOCKER and
+  HIGH above (and stopped without fixing them, per its own explicit
+  instruction); a dedicated remediation pass fixed exactly those three
+  findings and added 12 new tests, nothing else; the second audit
+  independently re-verified every fix from scratch — including direct
+  hostile SQL invocation as the real `authenticated` role, not merely
+  re-running the remediation's own test suite — and returned **GO**.
+- **Milestone 3.2 status: PASS** (`docs/13-Technical-Design-Review.md`
+  "Milestone 3.2 — Overall Closeout"). Not yet committed or pushed as of
+  this entry.

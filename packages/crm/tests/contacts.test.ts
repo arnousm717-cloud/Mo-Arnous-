@@ -7,6 +7,7 @@ import {
   createContact,
   getContactById,
   getContactByIdIncludingDeleted,
+  getContactByEmail,
   listContacts,
   updateContact,
   softDeleteContact,
@@ -235,6 +236,54 @@ describe("getContactById", () => {
     const created = await createContact(ctx, { firstName: "Ada" });
     await softDeleteContact(ctx, created.id);
     expect(await getContactById(ctx, created.id)).toBeNull();
+  });
+});
+
+describe("getContactByEmail (Milestone 3.2C -- Visitor Identification's canonical lookup)", () => {
+  it("finds a contact by exact email", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const email = `ada-${randomUUID()}@example.test`;
+    const created = await createContact(ctx, { email });
+    const found = await getContactByEmail(ctx, email);
+    expect(found?.id).toBe(created.id);
+  });
+
+  it("matches case-insensitively, mirroring contacts_org_active_email_idx's own lower(email) semantics", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const email = `Ada-${randomUUID()}@Example.Test`;
+    const created = await createContact(ctx, { email });
+    const found = await getContactByEmail(ctx, email.toUpperCase());
+    expect(found?.id).toBe(created.id);
+  });
+
+  it("returns null for no matching email", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const found = await getContactByEmail({ userId, organizationId, roleKey }, `nobody-${randomUUID()}@example.test`);
+    expect(found).toBeNull();
+  });
+
+  it("does not match a contact belonging to a different organization, even with the identical email", async () => {
+    const orgA = await createOrgWithActiveMember();
+    const orgB = await createOrgWithActiveMember();
+    const email = `shared-${randomUUID()}@example.test`;
+    await createContact({ userId: orgB.userId, organizationId: orgB.organizationId, roleKey: orgB.roleKey }, { email });
+
+    const found = await getContactByEmail(
+      { userId: orgA.userId, organizationId: orgA.organizationId, roleKey: orgA.roleKey },
+      email,
+    );
+    expect(found).toBeNull();
+  });
+
+  it("excludes a soft-deleted contact -- matches getContactById's own exclusion exactly", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const email = `ada-${randomUUID()}@example.test`;
+    const created = await createContact(ctx, { email });
+    await softDeleteContact(ctx, created.id);
+    expect(await getContactByEmail(ctx, email)).toBeNull();
   });
 });
 

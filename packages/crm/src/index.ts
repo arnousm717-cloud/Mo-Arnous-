@@ -14,6 +14,7 @@ export {
   createContact,
   getContactById,
   getContactByIdIncludingDeleted,
+  getContactByEmail,
   listContacts,
   updateContact,
   softDeleteContact,

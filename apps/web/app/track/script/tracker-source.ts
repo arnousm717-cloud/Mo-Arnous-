@@ -1,5 +1,5 @@
 /**
- * Milestone 3.1D — the browser tracking script's actual source, as a
+ * Milestone 3.1D/3.2E — the browser tracking script's actual source, as a
  * plain-JavaScript string constant. This file is TypeScript; the STRING
  * VALUE it exports is not. GET /track/script (route.ts) serves this
  * string byte-for-byte as the response body.
@@ -30,7 +30,8 @@
  *
  *   window.aiRevenueOsTracker = window.aiRevenueOsTracker || { q: [],
  *     consent: function (s) { this.q.push(["consent", s]); },
- *     track: function (e, f) { this.q.push(["track", e, f]); } };
+ *     track: function (e, f) { this.q.push(["track", e, f]); },
+ *     identify: function (a) { this.q.push(["identify", a]); } };
  *
  * The real script detects that shape (an object with a `.q` array and
  * no __aiRevenueOsInitialized marker), replays its queued commands in
@@ -393,6 +394,22 @@ export const TRACKER_SCRIPT_SOURCE = `
     sendCollect(eventType, extra);
   }
 
+  function identify(assertion) {
+    // Milestone 3.2E. The tracker never parses, verifies, or interprets
+    // the assertion in any way -- it is an opaque string obtained by the
+    // host page from the customer's own trusted backend (out of band,
+    // never via this script) and relayed verbatim to POST /track/identify.
+    // Never persisted anywhere (no storage key exists for it, unlike
+    // anonymousId/consent state) -- it lives only as this function's own
+    // parameter and the body of the one fetch call below, then is
+    // discarded. Gated on granted consent exactly like track() -- fails
+    // closed without a network request otherwise.
+    if (inert) return;
+    if (typeof assertion !== 'string' || assertion.length === 0) return;
+    if (!state.granted || !state.anonymousId) return;
+    postJson('/track/identify', { siteKey: siteKey, anonymousId: state.anonymousId, assertion: assertion });
+  }
+
   function processCommand(cmd) {
     try {
       if (!cmd || typeof cmd.length !== 'number' || cmd.length < 1) return;
@@ -401,6 +418,8 @@ export const TRACKER_SCRIPT_SOURCE = `
         consent(cmd[1]);
       } else if (name === 'track') {
         track(cmd[1], cmd[2]);
+      } else if (name === 'identify') {
+        identify(cmd[1]);
       }
       // any other command name is dropped as invalid.
     } catch (e) {
@@ -460,7 +479,8 @@ export const TRACKER_SCRIPT_SOURCE = `
   w[GLOBAL_NAME] = {
     __aiRevenueOsInitialized: true,
     consent: consent,
-    track: track
+    track: track,
+    identify: identify
   };
 
   for (var ci = 0; ci < queuedCommands.length; ci++) {

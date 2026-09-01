@@ -209,6 +209,39 @@ export async function getContactById(ctx: RequestContext & { organizationId: str
 }
 
 /**
+ * Milestone 3.2C. The canonical email-resolution primitive Visitor
+ * Identification builds on, rather than a second, hand-rolled lookup
+ * living in packages/intelligence. Mirrors getContactById in every
+ * respect except the lookup key: excludes soft-deleted rows, returns
+ * null identically for nonexistent/cross-org/soft-deleted/no-match (a
+ * deliberately unified "no such active contact" result — this package
+ * has no legitimate reason to distinguish those cases for this caller).
+ *
+ * lower(email) matching mirrors contacts_org_active_email_idx exactly
+ * (packages/database/supabase/migrations/20260812120000) — the unique
+ * index's own case-insensitive semantics, not reinvented here. The
+ * caller is responsible for lowercasing/trimming its own input if it
+ * wants consistent matching against user-typed variations; this
+ * function does not further normalize beyond what the index itself
+ * already guarantees uniqueness against.
+ */
+export async function getContactByEmail(
+  ctx: RequestContext & { organizationId: string },
+  email: string,
+  existingClient?: PoolClient,
+): Promise<Contact | null> {
+  return runInClientOrTransaction(ctx, existingClient, async (client) => {
+    const r = await client.query<ContactRow>(
+      `select ${CONTACT_COLUMNS} from public.contacts
+       where organization_id = $1 and lower(email) = lower($2) and deleted_at is null`,
+      [ctx.organizationId, email],
+    );
+    const row = r.rows[0];
+    return row ? toContact(row) : null;
+  });
+}
+
+/**
  * Milestone 2.2E. Mirrors getCompanyByIdIncludingDeleted exactly (same
  * tenant-scoped, read-only shape, no new migration) — does not filter out
  * soft-deleted rows. A deal's primaryContactId is deliberately preserved

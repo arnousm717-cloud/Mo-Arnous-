@@ -33,6 +33,7 @@ export type PermissionKey =
   | "agencies:manage-billing"
   | "agencies:manage-domains"
   | "consent:record"
+  | "tracking:manage-identity-keys"
   | "data-subject-requests:create"
   | "data-subject-requests:read"
   | "data-subject-requests:execute"
@@ -231,6 +232,11 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     // of these three — agency-facing compliance workflows are explicitly
     // deferred until scoped separately.
     "consent:record": true,
+    // Milestone 3.2B, same reasoning as consent:record immediately
+    // above: org_admin-only, no agency-scoped role gets it — managing
+    // which Ed25519 public keys can assert a visitor's identity is a
+    // security-sensitive, per-organization decision.
+    "tracking:manage-identity-keys": true,
     "data-subject-requests:create": true,
     "data-subject-requests:read": true,
     "data-subject-requests:execute": true,

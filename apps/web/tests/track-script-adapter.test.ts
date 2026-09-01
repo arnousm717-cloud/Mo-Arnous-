@@ -98,6 +98,7 @@ interface TrackerGlobal {
   __aiRevenueOsInitialized: boolean;
   consent: (status: string) => void;
   track: (eventType: string, fields?: unknown) => void;
+  identify: (assertion: string) => void;
 }
 
 function getGlobal(sandbox: Record<string, unknown>): TrackerGlobal {
@@ -659,5 +660,47 @@ describe("host-page safety: uncaught-exception resistance", () => {
     expect(() => g.track("form_submit", { metadata: { a: 1 } })).not.toThrow();
     expect(() => g.consent("not-a-real-status" as never)).not.toThrow();
     expect(() => g.track("not-a-real-event" as never)).not.toThrow();
+  });
+});
+
+describe("identify(assertion): storage integrity and failure resilience (Milestone 3.2E)", () => {
+  it("the assertion is never written to localStorage or sessionStorage, before or after calling identify()", () => {
+    const { context, sandbox, localStorageStub, sessionStorageStub } = createSandbox();
+    runTracker(context);
+    getGlobal(sandbox).consent("granted");
+    const secretAssertion = "very-distinctive-assertion-payload-marker.sig";
+    getGlobal(sandbox).identify(secretAssertion);
+    const local = (localStorageStub as unknown as { _store: Map<string, string> })._store;
+    const session = (sessionStorageStub as unknown as { _store: Map<string, string> })._store;
+    for (const value of [...local.values(), ...session.values()]) {
+      expect(value).not.toContain(secretAssertion);
+    }
+  });
+
+  it("identify() never throws even when storage/crypto/fetch are all hostile", () => {
+    const { context, sandbox } = createSandbox({
+      localStorage: makeStubStorage({ throwOnAccess: true }),
+      sessionStorage: makeStubStorage({ throwOnAccess: true }),
+      fetchResponder: () => {
+        throw new Error("fetch itself throws synchronously");
+      },
+    });
+    runTracker(context);
+    const g = getGlobal(sandbox);
+    expect(() => g.consent("granted")).not.toThrow();
+    expect(() => g.identify("a.b")).not.toThrow();
+  });
+
+  it("network failure (rejected promise) during identify() is dropped, no retry, no throw", async () => {
+    const { context, sandbox, calls } = createSandbox({
+      fetchResponder: () => Promise.reject(new Error("network down")) as unknown as { status: number; headers: { get: (n: string) => string | null } },
+    });
+    runTracker(context);
+    getGlobal(sandbox).consent("granted");
+    await new Promise((r) => setImmediate(r));
+    calls.length = 0;
+    expect(() => getGlobal(sandbox).identify("a.b")).not.toThrow();
+    await new Promise((r) => setImmediate(r));
+    expect(calls.length).toBe(1); // the attempt was made once; no retry follows.
   });
 });

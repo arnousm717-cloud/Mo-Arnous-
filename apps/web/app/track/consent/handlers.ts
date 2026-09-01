@@ -1,5 +1,7 @@
+import { withTenantContext } from "@ai-revenue-os/database";
 import { resolveOrganizationContextForTrackingSite } from "@ai-revenue-os/auth";
 import { recordVisitorCookieTrackingConsent } from "@ai-revenue-os/compliance";
+import { unlinkVisitorIdentityOnWithdrawal } from "@ai-revenue-os/intelligence";
 import { checkTrackingRateLimit } from "../_shared/rate-limit";
 import { InvalidJsonError, PayloadTooLargeError, readBoundedJsonBody } from "../_shared/request";
 import { ValidationError, validateConsentRequest } from "../_shared/validation";
@@ -85,7 +87,25 @@ export async function handleConsentRequest(request: Request): Promise<Response> 
   }
 
   try {
-    await recordVisitorCookieTrackingConsent(fields.siteKey, fields.anonymousId, fields.status);
+    if (fields.status === "withdrawn") {
+      // Milestone 3.2F: withdrawal must atomically unlink any active
+      // identity binding, not merely record the consent-status change —
+      // both happen on the SAME PoolClient/transaction, via
+      // existingClient pass-through (the 2.5B-established composition
+      // primitive), never two independently-committed round trips.
+      // recordVisitorCookieTrackingConsent's own SQL function is called
+      // completely unmodified; only this call site changed. The granted
+      // path immediately below is untouched — byte-identical to its
+      // pre-3.2F behavior.
+      await withTenantContext({ organizationId: siteContext.organizationId }, async (client) => {
+        const written = await recordVisitorCookieTrackingConsent(fields.siteKey, fields.anonymousId, fields.status, client);
+        if (written) {
+          await unlinkVisitorIdentityOnWithdrawal({ organizationId: siteContext.organizationId }, fields.anonymousId, client);
+        }
+      });
+    } else {
+      await recordVisitorCookieTrackingConsent(fields.siteKey, fields.anonymousId, fields.status);
+    }
   } catch {
     return internalErrorResponse();
   }

@@ -418,3 +418,105 @@ describe("POST /track/consent: logging discipline", () => {
     expect(combined).not.toContain(anonymousId!);
   });
 });
+
+describe("POST /track/consent: withdrawal atomically unlinks identity (Milestone 3.2F)", () => {
+  async function seedIdentifiedVisitor(organizationId: string, anonymousId: string): Promise<{ visitorId: string; contactId: string }> {
+    const client = await adminPool.connect();
+    try {
+      const contact = await client.query<{ id: string }>(
+        "insert into public.contacts (organization_id, first_name, email) values ($1, $2, $3) returning id",
+        [organizationId, "Test", `identified-${randomUUID()}@example.test`],
+      );
+      const visitor = await client.query<{ id: string }>(
+        "insert into public.website_visitors (organization_id, anonymous_id, identified_contact_id) values ($1, $2, $3) returning id",
+        [organizationId, anonymousId, contact.rows[0]!.id],
+      );
+      return { visitorId: visitor.rows[0]!.id, contactId: contact.rows[0]!.id };
+    } finally {
+      client.release();
+    }
+  }
+
+  it("withdrawing consent for an identified visitor clears identified_contact_id and writes an unlinked_withdrawal audit row", async () => {
+    const anonymousId = randomUUID();
+    const { visitorId, contactId } = await seedIdentifiedVisitor(fx.orgAId, anonymousId);
+
+    const response = await POST(consentRequest({ siteKey: fx.activeSiteAId, anonymousId, status: "withdrawn" }));
+    expect(response.status).toBe(204);
+
+    const client = await adminPool.connect();
+    try {
+      const visitor = await client.query<{ identified_contact_id: string | null }>(
+        "select identified_contact_id from public.website_visitors where id = $1",
+        [visitorId],
+      );
+      expect(visitor.rows[0]!.identified_contact_id).toBeNull();
+
+      const audit = await client.query(
+        "select event_type, contact_id from public.visitor_identifications where website_visitor_id = $1",
+        [visitorId],
+      );
+      expect(audit.rows).toHaveLength(1);
+      expect(audit.rows[0]!.event_type).toBe("unlinked_withdrawal");
+      expect(audit.rows[0]!.contact_id).toBe(contactId);
+    } finally {
+      client.release();
+    }
+  });
+
+  it("does NOT permanently suppress the visitor -- identification_suppressed_at remains null after withdrawal", async () => {
+    const anonymousId = randomUUID();
+    const { visitorId } = await seedIdentifiedVisitor(fx.orgAId, anonymousId);
+    await POST(consentRequest({ siteKey: fx.activeSiteAId, anonymousId, status: "withdrawn" }));
+
+    const client = await adminPool.connect();
+    try {
+      const visitor = await client.query<{ identification_suppressed_at: string | null }>(
+        "select identification_suppressed_at from public.website_visitors where id = $1",
+        [visitorId],
+      );
+      expect(visitor.rows[0]!.identification_suppressed_at).toBeNull();
+    } finally {
+      client.release();
+    }
+  });
+
+  it("granting consent (not withdrawing) never touches identified_contact_id -- the granted path is untouched by 3.2F", async () => {
+    const anonymousId = randomUUID();
+    const { visitorId, contactId } = await seedIdentifiedVisitor(fx.orgAId, anonymousId);
+
+    const response = await POST(consentRequest({ siteKey: fx.activeSiteAId, anonymousId, status: "granted" }));
+    expect(response.status).toBe(204);
+
+    const client = await adminPool.connect();
+    try {
+      const visitor = await client.query<{ identified_contact_id: string | null }>(
+        "select identified_contact_id from public.website_visitors where id = $1",
+        [visitorId],
+      );
+      expect(visitor.rows[0]!.identified_contact_id).toBe(contactId);
+      const audit = await client.query("select id from public.visitor_identifications where website_visitor_id = $1", [
+        visitorId,
+      ]);
+      expect(audit.rows).toHaveLength(0);
+    } finally {
+      client.release();
+    }
+  });
+
+  it("withdrawing consent for a visitor that was never identified is a clean no-op with no audit row", async () => {
+    const anonymousId = randomUUID();
+    const client = await adminPool.connect();
+    try {
+      await client.query("insert into public.website_visitors (organization_id, anonymous_id) values ($1, $2)", [
+        fx.orgAId,
+        anonymousId,
+      ]);
+    } finally {
+      client.release();
+    }
+
+    const response = await POST(consentRequest({ siteKey: fx.activeSiteAId, anonymousId, status: "withdrawn" }));
+    expect(response.status).toBe(204);
+  });
+});

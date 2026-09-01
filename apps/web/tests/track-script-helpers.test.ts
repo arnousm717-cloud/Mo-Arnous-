@@ -110,6 +110,7 @@ interface TrackerGlobal {
   __aiRevenueOsInitialized: boolean;
   consent: (status: string) => void;
   track: (eventType: string, fields?: unknown) => void;
+  identify: (assertion: string) => void;
 }
 
 function getGlobal(sandbox: Record<string, unknown>): TrackerGlobal {
@@ -389,6 +390,71 @@ describe("explicit track() allowlist", () => {
   });
 });
 
+describe("identify(assertion) — Milestone 3.2E", () => {
+  it("before consent: no network call, regardless of assertion validity", () => {
+    const { context, sandbox, calls } = createSandbox();
+    runTracker(context);
+    getGlobal(sandbox).identify("some.assertion");
+    expect(calls.length).toBe(0);
+  });
+
+  it("after consent: sends exactly one POST /track/identify with siteKey/anonymousId/assertion", () => {
+    const siteKey = randomUUID();
+    const { context, sandbox, calls } = createSandbox({ siteKey });
+    runTracker(context);
+    getGlobal(sandbox).consent("granted");
+    calls.length = 0;
+    getGlobal(sandbox).identify("header.payload.signature");
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.url).toContain("/track/identify");
+    const body = JSON.parse(calls[0]!.init.body) as Record<string, unknown>;
+    expect(body.siteKey).toBe(siteKey);
+    expect(typeof body.anonymousId).toBe("string");
+    expect(body.assertion).toBe("header.payload.signature");
+    expect(Object.keys(body).sort()).toEqual(["anonymousId", "assertion", "siteKey"]);
+  });
+
+  it("uses credentials: omit, matching every other /track/* call", () => {
+    const { context, sandbox, calls } = createSandbox();
+    runTracker(context);
+    getGlobal(sandbox).consent("granted");
+    calls.length = 0;
+    getGlobal(sandbox).identify("a.b");
+    expect(calls[0]!.init.credentials).toBe("omit");
+  });
+
+  it("a non-string or empty assertion is dropped locally, no network call", () => {
+    const { context, sandbox, calls } = createSandbox();
+    runTracker(context);
+    getGlobal(sandbox).consent("granted");
+    calls.length = 0;
+    getGlobal(sandbox).identify("");
+    getGlobal(sandbox).identify(null as unknown as string);
+    getGlobal(sandbox).identify(undefined as unknown as string);
+    getGlobal(sandbox).identify(12345 as unknown as string);
+    expect(calls.length).toBe(0);
+  });
+
+  it("dropped immediately after withdrawal — same synchronous gating as track()", () => {
+    const { context, sandbox, calls } = createSandbox();
+    runTracker(context);
+    getGlobal(sandbox).consent("granted");
+    getGlobal(sandbox).consent("withdrawn");
+    calls.length = 0;
+    getGlobal(sandbox).identify("a.b");
+    expect(calls.length).toBe(0);
+  });
+
+  it("inert (missing/malformed site key) -> identify() is a safe no-op", () => {
+    const { context, sandbox, calls } = createSandbox({ siteKey: null });
+    runTracker(context);
+    expect(() => getGlobal(sandbox).identify("a.b")).not.toThrow();
+    getGlobal(sandbox).consent("granted");
+    getGlobal(sandbox).identify("a.b");
+    expect(calls.length).toBe(0);
+  });
+});
+
 describe("duplicate load protection", () => {
   it("second real-script execution is a complete no-op", () => {
     const { context, sandbox, calls } = createSandbox({ siteKey: randomUUID() });
@@ -421,6 +487,26 @@ describe("pre-load command queue", () => {
       return (body.status as string | undefined) ?? (body.eventType as string | undefined);
     });
     expect(eventTypes).toEqual(["granted", "pageview", "click"]);
+  });
+
+  it("replays a queued identify command after a queued consent grant, respecting consent gating", () => {
+    const { context, calls } = createSandbox({
+      siteKey: randomUUID(),
+      preloadGlobal: {
+        q: [
+          ["identify", "queued.assertion"], // before grant -> dropped
+          ["consent", "granted"], // -> 1 consent POST + 1 auto pageview
+          ["identify", "queued.assertion"], // after grant -> sent
+        ],
+      },
+    });
+    runTracker(context);
+    // dropped-identify (0) + granted (2) + sent-identify (1) = 3.
+    expect(calls.length).toBe(3);
+    const identifyCall = calls.find((c) => c.url.includes("/track/identify"));
+    expect(identifyCall).toBeDefined();
+    const body = JSON.parse(identifyCall!.init.body) as Record<string, unknown>;
+    expect(body.assertion).toBe("queued.assertion");
   });
 
   it("invalid queued commands are dropped without throwing", () => {
@@ -502,12 +588,21 @@ describe("static source-level safety properties", () => {
     expect(TRACKER_SCRIPT_SOURCE).not.toContain("Object.keys(sessionStorage)");
   });
 
-  it("never references identify/setUser/traits/organizationId/userId/email — no 3.2 scope creep", () => {
-    expect(TRACKER_SCRIPT_SOURCE).not.toMatch(/\bidentify\b/);
+  // Milestone 3.2E deliberately, narrowly adds identify(assertion) — an
+  // opaque-string relay, never a structured identity API. This test's
+  // own original name/scope ("no 3.2 scope creep") is updated to reflect
+  // exactly that authorized, narrow addition rather than forbidding it
+  // outright — setUser/traits/organizationId/userId/email remain
+  // correctly forbidden: none of them appear anywhere in the script,
+  // since identify() never accepts or constructs structured identity
+  // fields, only relays an opaque string the host page already obtained
+  // out of band.
+  it("never references setUser/traits/organizationId/userId/email, and identify() is the only identity-shaped addition (Milestone 3.2E, opaque-string relay only)", () => {
     expect(TRACKER_SCRIPT_SOURCE).not.toMatch(/\bsetUser\b/);
     expect(TRACKER_SCRIPT_SOURCE).not.toMatch(/\btraits\b/);
     expect(TRACKER_SCRIPT_SOURCE).not.toMatch(/\borganizationId\b/);
     expect(TRACKER_SCRIPT_SOURCE).not.toMatch(/\buserId\b/);
     expect(TRACKER_SCRIPT_SOURCE).not.toMatch(/\bemail\b/i);
+    expect(TRACKER_SCRIPT_SOURCE).not.toMatch(/\bcontactId\b/i);
   });
 });

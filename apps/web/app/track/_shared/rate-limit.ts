@@ -20,8 +20,8 @@ import { withTenantContext } from "@ai-revenue-os/database";
  * ("hex")) — not reinvented.
  */
 
-export type RateLimitSurface = "collect" | "consent";
-export type RateLimitDimension = "anon" | "ip" | "site";
+export type RateLimitSurface = "collect" | "consent" | "identify";
+export type RateLimitDimension = "anon" | "ip" | "site" | "email";
 
 // Fixed at exactly 60 — the approved production configuration for every
 // dimension. Not a parameter: nothing here lets a caller supply a
@@ -31,11 +31,20 @@ const WINDOW_SECONDS = 60;
 
 // Trusted, hardcoded configuration — never derived from request data.
 // collect: 60/600/6000 per minute (anon/IP/site). consent: 10/100/1000
-// per minute. Both well under check_tracking_rate_limit()'s own <= 86400
-// upper bound (60s here, vs. an 86400s ceiling).
-const LIMITS: Record<RateLimitSurface, Record<RateLimitDimension, number>> = {
+// per minute. identify (Milestone 3.2D): deliberately tighter than
+// collect/consent, reflecting this endpoint's higher sensitivity (it is
+// the one public tracking surface that resolves a real CRM contact) --
+// plus a fourth dimension, email (a SHA-256 hash of the assertion's own
+// email claim, never the raw value, mirroring hashTrackingRateLimitBucket's
+// existing no-raw-identifier contract exactly), bounding email-
+// enumeration/contact-existence-oracle attempts that collect/consent
+// never had to consider, since neither carries any PII-shaped lookup
+// key. Every entry remains well under check_tracking_rate_limit()'s own
+// <= 86400 upper bound (60s window throughout).
+const LIMITS: Record<RateLimitSurface, Partial<Record<RateLimitDimension, number>>> = {
   collect: { anon: 60, ip: 600, site: 6000 },
   consent: { anon: 10, ip: 100, site: 1000 },
+  identify: { anon: 10, ip: 100, site: 1000, email: 5 },
 };
 
 interface CheckRateLimitRow {
@@ -57,7 +66,15 @@ export interface RateLimitConfig {
  * it, since both read from the same LIMITS/WINDOW_SECONDS source.
  */
 export function getRateLimitConfig(surface: RateLimitSurface, dimension: RateLimitDimension): RateLimitConfig {
-  return { windowSeconds: WINDOW_SECONDS, limit: LIMITS[surface][dimension] };
+  const limit = LIMITS[surface][dimension];
+  if (limit === undefined) {
+    // Every real call site only ever requests a (surface, dimension) pair
+    // this module actually defines — reaching this means a genuine
+    // programming error, not a runtime/user-input condition, so a thrown
+    // exception (rather than a silent fallback limit) is correct here.
+    throw new Error(`no rate limit configured for surface="${surface}" dimension="${dimension}"`);
+  }
+  return { windowSeconds: WINDOW_SECONDS, limit };
 }
 
 /**
@@ -104,7 +121,7 @@ export async function checkTrackingRateLimit(
   identifier: string,
 ): Promise<boolean> {
   const bucketHash = hashTrackingRateLimitBucket(surface, dimension, identifier);
-  const limit = LIMITS[surface][dimension];
+  const { limit } = getRateLimitConfig(surface, dimension);
 
   return withTenantContext({}, async (client) => {
     const r = await client.query<CheckRateLimitRow>(
