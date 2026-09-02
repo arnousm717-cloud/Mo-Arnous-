@@ -63,7 +63,7 @@ Paced for a solo founder building with AI assistance (`01-Vision.md`) — phases
 **Features**
 - Tracking script + the dedicated, unauthenticated public ingestion endpoint (`04-API-Architecture.md` §2 — a separate route outside `/api/v1/*` given its opposite security/traffic profile from the rest of the API), consent-gated
 - `website_visitors`, `visitor_sessions`, `visitor_events`, visitor identification logic
-- Company/Contact enrichment provider integration (via provider-agnostic adapter, first n8n workflow live: Lead Enrichment), with `workflow_runs.cost_usd` tracked from this workflow's first run — since it's triggerable directly from the UI (not only via an agent), this is the first place provider cost needs a home outside `agent_tool_calls`
+- Company/Contact enrichment provider integration (via provider-agnostic adapter; the AI Revenue OS side — schema, service-authenticated write-back API, dispatch-trigger infrastructure — shipped in Milestone 3.3, `docs/13-Technical-Design-Review.md` "Milestone 3.3 — Overall Closeout"; the real provider-calling Lead Enrichment n8n workflow itself remains a later n8n workflow-authoring sub-phase, not part of that delivery), with `workflow_runs.cost_usd` tracked from this workflow's first run — since it's triggerable directly from the UI (not only via an agent), this is the first place provider cost needs a home outside `agent_tool_calls`
 - Rules-based lead scoring engine (`scoring_rules`, `lead_scores`)
 - Revenue Dashboard v1 (pipeline value, win rate, trend charts)
 
@@ -112,7 +112,7 @@ Paced for a solo founder building with AI assistance (`01-Vision.md`) — phases
 ## Phase 5 — Automations
 
 **Features**
-- Full n8n workflow catalog live: CRM Automation, Email Automation, Proposal Workflow, Customer Onboarding, Reporting Workflow (Lead Enrichment and Website Visitor Intelligence workflows already shipped in Phase 3)
+- Full n8n workflow catalog live: CRM Automation, Email Automation, Proposal Workflow, Customer Onboarding, Reporting Workflow, and the real provider-calling Lead Enrichment workflow itself (Phase 3/Milestone 3.3 shipped only the AI Revenue OS side of Lead Enrichment — schema, write-back API, dispatch trigger — never the n8n workflow; Website Visitor Intelligence needs no n8n workflow at all and was already fully shipped in Phase 3, direct/synchronous per `06-n8n-Workflow-Architecture.md` §3)
 - **Brain source expansion**: Email Sync and Meeting Ingestion workflows (`06-n8n-Workflow-Architecture.md` §10-11) — new provider integrations (mailbox sync, meeting transcription), each requiring a Data Processing Addendum (`08-Security.md` §5) and the new `email_content_processing`/`meeting_recording_processing` consent types before any tenant can enable them
 - Proposal Generator (draft, send, tracked view, accept/decline) — send always a distinct, human-triggered step, never auto-chained from draft generation
 - Email Automation module (campaigns, sequences, deliverability handling, suppression lists), with `email_sends.consent_verified` giving this workflow the same consent-audit trail as the Brain's email/meeting ingestion

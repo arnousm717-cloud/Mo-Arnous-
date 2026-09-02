@@ -315,6 +315,36 @@ describe("executeContactErasure: own-organization success", () => {
     expect(await rowExistsIn("public.contacts", "id", contact.id)).toBe(false);
   });
 
+  it("Milestone 3.3 Reliability Remediation regression: a real GDPR erasure cascade-deletes a pre-existing contact_enrichment row via the real execute path, not merely a raw DELETE", async () => {
+    const admin = await createAuthUser("enrichment-cascade-admin");
+    const orgId = await createOrgWithOwner(admin, "Contact Enrichment Cascade Org");
+    const contact = await createContact(orgId);
+
+    // Simulate a prior, real Milestone 3.3 enrichment write for this
+    // contact (the shape packages/intelligence's recordEnrichmentResult
+    // itself would insert).
+    await seedAsAdmin(async (client) => {
+      await client.query(
+        `insert into public.contact_enrichment (organization_id, contact_id, provider, status, normalized_result, fetched_at)
+         values ($1, $2, 'test-provider', 'completed', $3::jsonb, now())`,
+        [orgId, contact.id, JSON.stringify({ companyDomain: "example.test" })],
+      );
+    });
+    expect(await rowExistsIn("public.contact_enrichment", "contact_id", contact.id)).toBe(true);
+
+    const dsr = await fileDataSubjectRequest(
+      { userId: admin, organizationId: orgId, roleKey: "org_admin" },
+      { subjectType: "contact", subjectId: contact.id, requestType: "delete" },
+    );
+    await executeContactErasure({ userId: admin }, dsr.id);
+
+    // The real erasure path (not a raw SQL DELETE) must cascade-remove
+    // the enrichment row via its FK to contacts, the same as the contact
+    // row itself.
+    expect(await rowExistsIn("public.contacts", "id", contact.id)).toBe(false);
+    expect(await rowExistsIn("public.contact_enrichment", "contact_id", contact.id)).toBe(false);
+  });
+
   it("rejects replay against an already-completed request, with no further effect", async () => {
     const admin = await createAuthUser("replay-admin");
     const orgId = await createOrgWithOwner(admin, "Contact Replay Org");

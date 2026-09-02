@@ -4662,7 +4662,218 @@ than fixed (see below).
 **Milestone 3.2: PASS.** Visitor identification is live behind `POST
 /track/identify`; Milestone 3.3 (n8n-mediated lead enrichment, the first
 n8n workflow) remains explicitly unbuilt and out of scope — no consumer
-of the `visitor.identified` outbox event exists yet.
+of the `visitor.identified` outbox event exists yet, as of this
+milestone's own close. **Milestone 3.3 — Lead Enrichment (AI Revenue OS
+side) has since shipped** — see "Milestone 3.3 — Overall Closeout"
+below; the `visitor.identified` outbox event now has its first real
+consumer.
+
+---
+
+## Milestone 3.3 — Overall Closeout
+
+**Milestone 3.3 — Lead Enrichment, AI Revenue OS side.** **Status:
+COMPLETE — pending commit.** Delivered as sub-phases 3.3A through 3.3F
+(enrichment/`workflow_runs` schema + RLS, service-authentication
+function, the `packages/auth` service-actor/scope layer, the
+provider-agnostic enrichment domain layer, the two API-key-authenticated
+write-back endpoints, the cron-driven dispatch route), followed by
+**four** sequential, independent, read-only Final Implementation
+Acceptance Audits — the first three each found exactly one new finding
+(two HIGH, one MEDIUM) and each was remediated in a dedicated,
+narrowly-scoped pass before the next audit; the fourth found nothing
+further and returned **GO**. As of this closeout the working tree is
+clean against `origin/main` (`f43ac14d6bf2408bd1ae495edd664e1e77da474d`)
+with the milestone's files staged as untracked/modified — **not yet
+committed or pushed**.
+
+### Architecture
+
+Provider-agnostic by construction: this platform never holds a provider
+credential and never calls a provider directly. n8n calls the enrichment
+provider on its own side and pushes an already-normalized result back via
+the write-back endpoints below. Provider selection was explicitly
+**deferred** at the accepted architecture-resolution stage — building the
+AI Revenue OS side provider-agnostically first, with provider-specific
+integration left to a later n8n workflow-authoring sub-phase — a
+deliberate scope boundary, not an oversight. `contact.created`/
+`company.created` are documented (`docs/06` §2) as alternate future
+triggers but are not wired; the one real, firing trigger today is
+`visitor.identified` (Milestone 3.2), the only event source that
+concretely exists.
+
+Service-to-service authentication is a genuinely separate mechanism from
+staff session auth — deliberately not `resolveRequestContext()`/`can()`,
+since a machine credential is not a human staff role. `resolve_api_key()`
+(`SECURITY DEFINER`, no `auth.uid()` guard, mirroring
+`resolve_tracking_site()`'s own precedent exactly) resolves a pre-hashed
+Bearer token to `(api_key_id, organization_id, scopes)`; `organization_id`
+is taken exclusively from the matched row, never a caller-supplied value.
+Authorization is scope-based (`hasScope`), reading `api_keys.scopes` — a
+jsonb column that has existed, unused, since M1.7.
+
+### Database (`docs/03-Database-Architecture.md` §2.3/§2.5/§2.10)
+
+- `contact_enrichment`/`company_enrichment` (new) — one row per
+  `(organization_id, entity, provider)`, upserted in place, never
+  accumulated as history (unlike this codebase's own append-only audit
+  tables) — a stale row has no evidentiary value once superseded.
+  Composite tenant-safe FK to `contacts`/`companies`, `ON DELETE CASCADE`
+  — an enrichment row cannot outlive its subject's hard erasure, verified
+  end-to-end with a real GDPR data-subject-request erasure.
+- `workflow_runs` (new) — narrower than this document's own
+  originally-documented shape (§2.5): no `workflow_ref_id` FK, since
+  `workflow_refs`/`integration_connections` do not exist yet. `workflow_key`
+  is a static, code-defined identifier instead, the same discipline
+  `event_deliveries.consumer` already established. `UNIQUE (organization_id,
+  workflow_key, source_event_id)` is the real per-logical-operation
+  idempotency guard — a retried delivery attempting to re-record "this
+  same trigger succeeded" is structurally a no-op, proven under genuine
+  concurrent writes (two real simultaneous connections racing the
+  identical upsert), never a duplicate cost/observability entry.
+- `event_deliveries` (M1.7, additively extended) — gained `status`
+  (`'leased'`/`'delivered'`) and `lease_expires_at` (Milestone 3.3
+  Claim-Lease Remediation, `20260902090000`, additive, does not edit the
+  original M1.7 migration). Existing rows backfilled to `'delivered'`
+  (the old semantics' own meaning) via the column default; every fresh
+  acquisition always specifies `status='leased'` explicitly, never
+  relying on that default.
+- `resolve_api_key(p_key_hash text) returns table(api_key_id, organization_id,
+  scopes)` (`SECURITY DEFINER`, `20260901090400`) — single atomic
+  `UPDATE ... RETURNING`, bumps `last_used_at`, returns zero rows
+  (never a distinguishable error) for a nonexistent, revoked, or
+  hash-mismatched key.
+
+### Runtime — the dispatcher, after two remediation rounds
+
+`packages/database/src/events.ts`'s `dispatchPendingEvents()` reads at
+most `DISPATCH_BATCH_SIZE` (10, fixed, code-defined) pending events per
+call, scoped to the calling consumers' own registered event types. Per
+`(event, consumer)` pair, a single atomic statement both acquires a fresh
+lease and reclaims an expired one:
+
+```sql
+insert into event_deliveries (event_id, consumer, status, lease_expires_at)
+values ($1, $2, 'leased', now() + (120 seconds))
+on conflict (event_id, consumer) do update set
+  status = 'leased', lease_expires_at = excluded.lease_expires_at
+where event_deliveries.status = 'leased'
+  and event_deliveries.lease_expires_at < now()
+returning id
+```
+
+No advisory or session lock of any kind protects this — the unique
+constraint plus this one statement is the entire concurrency-safety *and*
+crash-recovery mechanism, proven under genuine two-connection concurrency
+(both a fresh-acquire race and a stale-lease-reclaim race — exactly one
+connection ever wins either). No transaction spans any external HTTP
+call. On success, a separate, independently persisted statement
+transitions the row to `'delivered'` — terminal, never reclaimable again
+by construction. On a caught failure, the row is deleted immediately
+(retryable on the very next tick, no lease wait); a process crash instead
+leaves the lease in place, self-healing once it expires via the same
+statement — no separate sweeper process exists or is needed.
+
+`GET /api/internal/dispatch-events` (Vercel Cron, every minute,
+`CRON_SECRET`-protected) is the sole caller in production, registering
+one consumer — `lead_enrichment` (`visitor.identified` only) — which
+posts `{eventId, organizationId, entityType, entityId}` to an
+operator-configured n8n webhook URL. `eventId` is `event.id` verbatim,
+stable across every retry of the same pair, the mechanism downstream
+processing can use to deduplicate a redelivered trigger — this
+architecture is **at-least-once delivery, not exactly-once external side
+effects**, an unavoidable distributed-systems boundary it does not claim
+to close.
+
+`events.processed_at` (an observability convenience only, never the real
+idempotency mechanism — that is `event_deliveries`' own unique
+constraint) is set only once every consumer applicable **to the current
+dispatcher invocation** has its own terminal `status='delivered'` row for
+that exact `(event_id, consumer)` pair — a completion count explicitly
+scoped to `consumer = ANY(currentApplicableConsumerNames)`, never
+influenced by a historical, renamed, removed, or otherwise non-applicable
+consumer's own unrelated delivered row (the Third Final Implementation
+Acceptance Audit's own finding and fix).
+
+### API surface (`docs/04-API-Architecture.md` §2.3, new §2.8)
+
+`POST /api/v1/contacts/{id}/enrichment`, `POST /api/v1/companies/{id}/
+enrichment` — API-key auth (`enrichment:write` scope, `Authorization:
+Bearer arev_...`), 64KB genuinely byte-counted bounded body (not merely
+trusting a declared `Content-Length`), strict field allowlist
+(`workflowKey` has no extraction path at all — always the fixed
+server-side `'lead_enrichment'` constant), 30/minute-per-organization
+rate limit (reuses `check_tracking_rate_limit()` under a verified-collision-
+free namespaced bucket). A live re-check of the target contact/company
+(existence and `deleted_at IS NULL`) runs inside the same transaction as
+the write — a delayed provider response arriving after erasure, or after
+the subject was recreated under a new id, is rejected identically to any
+other reason, never silently reattached to the wrong row. The monotonic
+upsert (`WHERE excluded.fetched_at > table.fetched_at`, strict, not `>=`)
+makes equal-timestamp replacement deterministic — the first-stored row
+always wins, never arrival-order-dependent.
+
+### Verification
+
+**Four** independent, read-only, adversarial Final Implementation
+Acceptance Audits were performed in sequence:
+
+1. Found **HIGH** — the original dispatcher held a batch-wide transaction
+   and an advisory lock open across every consumer's external HTTP call,
+   unbounded by any `LIMIT`. Remediated: bounded batch, no lock, no
+   transaction spanning external I/O, event-type-scoped selection.
+2. Found **HIGH** — the remediation's own "claim-first" design left a
+   real crash window causing silent, permanent, unretried delivery loss.
+   Reproduced directly against real Postgres. Remediated: the
+   claim/lease/terminal-delivery model described above (additive
+   migration).
+3. Found **MEDIUM** — the `processed_at` completion check could be
+   satisfied by an unrelated historical/renamed/removed consumer's own
+   delivered row. Reproduced directly. Remediated: completion scoped to
+   the current invocation's own deduplicated applicable consumer names.
+4. Found **nothing further**. Independently reproduced all twelve
+   hostile scenarios named in its own brief against real PostgreSQL —
+   not trusting any prior report — and returned **GO**.
+
+- `pnpm turbo run test --force` (normal parallelism, no
+  `--no-file-parallelism`/`--concurrency` workaround): **2788/2788**,
+  reproduced fresh and again against a real accumulated backlog, both
+  fully green.
+- `pnpm lint`/`typecheck`/`build`: clean across all 9 packages.
+- Fresh `supabase db reset`: all six Milestone 3.3 migrations (five
+  original plus the additive lease-state migration) apply cleanly, in
+  order, from a fully torn-down local database — performed repeatedly
+  across all four audits and both remediation passes.
+- Dedicated regression suites at final sign-off: dispatcher **21/21**,
+  dispatch-events API + enrichment write-back API **19/19**, intelligence
+  enrichment **21/21**, contact erasure **24/24**.
+
+### Remaining Findings (preserved, not fixed this milestone)
+
+- **Informational** — `contact.created`/`company.created` triggers remain
+  unwired; only `visitor.identified` fires today. Correctly scoped as
+  complete for this milestone's own authorized initial slice, not a
+  partial implementation of a broader one (confirmed by direct search: no
+  domain code emits either event).
+- **Informational** — `raw_payload`'s `expires_at` is computed and
+  stored but nothing yet reads or enforces it as an active purge.
+- **Informational** — the dispatcher's inner `if (applicable.length === 0)
+  continue` branch is structurally unreachable dead code, a consequence
+  of the first remediation round's own event-type-scoped `SELECT` —
+  confirmed by direct proof (not merely assumed), left in place since it
+  documents intent cheaply and touching it was out of scope for the fix
+  that made it unreachable.
+- **Informational** — a small number of pre-existing, unrelated
+  tracking-rate-limit tests are intermittently flaky under heavy
+  concurrent full-suite load, independently reproduced across multiple
+  audit sessions; none were touched by this milestone, and none
+  manifested in final sign-off verification.
+
+**Milestone 3.3: PASS.** Lead enrichment write-back, service
+authentication, and the reliability-hardened dispatcher are live; the
+real n8n workflow JSON, provider selection, and any provider credential
+remain out of this milestone's own scope, deferred to a later n8n
+workflow-authoring sub-phase.
 
 ---
 

@@ -53,6 +53,12 @@ export {
   type GeneratedApiKey,
   type ApiKeyRecord,
 } from "./api-keys";
+export {
+  parseBearerApiKey,
+  resolveServiceActorFromApiKey,
+  hasScope,
+  type ServiceActor,
+} from "./service-auth";
 // refreshSession and exchangeAuthCode are deliberately NOT re-exported here
 // — they must be imported from "@ai-revenue-os/auth/middleware" directly.
 // This barrel pulls in resolveRequestContext, which depends on pg (Node-only

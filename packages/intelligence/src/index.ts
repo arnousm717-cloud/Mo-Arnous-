@@ -20,3 +20,13 @@ export {
   type IdentifyRejectionReason,
 } from "./identify";
 export { IntelligenceError, InvalidEventTypeError, InvalidSessionRelationshipError } from "./errors";
+export {
+  recordEnrichmentResult,
+  recordWorkflowRunStarted,
+  recordWorkflowRunTriggerFailed,
+  DEFAULT_ENRICHMENT_TTL_DAYS,
+  type EnrichmentEntityType,
+  type EnrichmentErrorClassification,
+  type RecordEnrichmentResultInput,
+  type RecordEnrichmentResultOutcome,
+} from "./enrichment";

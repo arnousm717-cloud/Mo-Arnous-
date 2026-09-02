@@ -2,6 +2,8 @@ export { getPool, closePool } from "./pool";
 export { withTenantContext, runInClientOrTransaction, type RequestContext } from "./tenant-context";
 export {
   dispatchPendingEvents,
+  DISPATCH_BATCH_SIZE,
+  LEASE_DURATION_SECONDS,
   type DomainEvent,
   type EventConsumer,
   type DispatchSummary,

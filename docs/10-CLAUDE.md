@@ -41,7 +41,7 @@ packages/tenancy      # Agency/org hierarchy, membership lifecycle, brand-theme 
 packages/compliance   # Consent, deletion/export orchestration, audit logging, retention
 packages/ui           # Design system components, theme tokens
 packages/crm          # Companies/contacts/deals/pipeline business rules
-packages/intelligence # Visitor identification, enrichment orchestration, lead scoring
+packages/intelligence # Visitor identification, enrichment write-back, lead scoring
 packages/revenue      # Proposal rules, revenue aggregation, subscription/billing orchestration; also serves Customer Portal data access
 packages/automation   # Workflow-enablement rules, campaign orchestration, onboarding provisioning
 packages/integrations # Provider-agnostic interfaces + n8n-facing API client
