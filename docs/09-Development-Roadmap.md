@@ -65,10 +65,10 @@ Paced for a solo founder building with AI assistance (`01-Vision.md`) — phases
 - `website_visitors`, `visitor_sessions`, `visitor_events`, visitor identification logic
 - Company/Contact enrichment provider integration (via provider-agnostic adapter; the AI Revenue OS side — schema, service-authenticated write-back API, dispatch-trigger infrastructure — shipped in Milestone 3.3, `docs/13-Technical-Design-Review.md` "Milestone 3.3 — Overall Closeout"; the real provider-calling Lead Enrichment n8n workflow itself remains a later n8n workflow-authoring sub-phase, not part of that delivery), with `workflow_runs.cost_usd` tracked from this workflow's first run — since it's triggerable directly from the UI (not only via an agent), this is the first place provider cost needs a home outside `agent_tool_calls`
 - Rules-based lead scoring engine (`scoring_rules`, `lead_scores`) — delivered in Milestone 3.4, `docs/13-Technical-Design-Review.md` "Milestone 3.4 — Overall Closeout": deterministic only, no AI/ML/agent involvement (that remains Phase 4's separate Scoring Agent persona scope, not part of this delivery)
-- Revenue Dashboard v1 (pipeline value, win rate, trend charts)
+- Revenue Dashboard v1 — delivered in Milestone 3.5, `docs/13-Technical-Design-Review.md` "Milestone 3.5 — Overall Closeout": Open Deals/Open Pipeline Value/Win Rate/Average Open Deal Size (deal-value metrics, explicitly never called "revenue" — no realized-revenue ledger exists), Deals by Stage, Lead Intelligence (score distribution + high-score contacts), Identified Visitor Intelligence (last-30-days count), Recently Created Deals. No trend chart or any chart library shipped — the historical data (stage-transition history, a won/closed-date column) this doc's own original "trend charts" framing assumed does not exist in this schema, so that specific aspiration was not built, not silently dropped
 
 **Deliverables**
-- A client organization can install the tracking script, see identified visitors resolve into CRM contacts, and see rules-based lead scores on those contacts
+- A client organization can install the tracking script, see identified visitors resolve into CRM contacts, see rules-based lead scores on those contacts, and see all of the above summarized on a real-time `/dashboard` page
 
 **Dependencies**
 - Phase 2 (contacts/companies to resolve visitors against); first real n8n workflow (Lead Enrichment) — establishes the n8n operating pattern used by all later automation phases, using the `api_keys` service-role credential built in Phase 1

@@ -8,6 +8,7 @@
 - Credentials for third-party providers (email sender, enrichment API, LinkedIn) are stored encrypted in `integration_connections` and injected into the workflow at execution time — never hardcoded into a workflow definition, so credentials can be rotated without editing workflows.
 - Workflow definitions are exported as JSON and version-controlled under `workflows/` in the monorepo — n8n's UI is the authoring tool, git is the source of truth.
 - **Deletion-in-progress check**: before any workflow executes a send or write action targeting a specific contact/company (an email send, a LinkedIn task, an automation rule action), it checks for an open `data_subject_requests` deletion in progress for that subject and skips the action if one exists — closing the narrow race condition between an in-flight automated action and an erasure request that was otherwise unaddressed.
+- **Milestone 3.5 note**: the Revenue Dashboard v1 (`docs/13-Technical-Design-Review.md` "Milestone 3.5 — Overall Closeout") involves **no n8n workflow of any kind** — every metric it renders is a read-only aggregate query against data that already exists, computed in-process by `packages/crm`/`packages/intelligence` and rendered by a Server Component with no browser-side fetch. Named here only so this catalog doesn't leave the dashboard's automation footprint ambiguous — no "Dashboard workflow" exists or is planned.
 
 ## 2. Workflow: Lead Enrichment
 

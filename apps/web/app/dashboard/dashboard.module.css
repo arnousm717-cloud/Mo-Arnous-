@@ -1,0 +1,197 @@
+/*
+ * Milestone 3.5B. Only the genuinely new KPI-grid styling lives here —
+ * .page/.pageHeader/.section/.secondaryButton are reused from
+ * ../companies/companies.module.css, the same cross-feature "console
+ * page" stylesheet apps/web/app/contacts/[id]/page.tsx and apps/web/app/
+ * deals/board/page.tsx already import unmodified. Plain CSS Modules only
+ * (locked decision) — no Tailwind/shadcn/Radix.
+ */
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 1rem;
+  margin: 0;
+}
+
+.kpiCard {
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  padding: 1rem;
+}
+
+.kpiCard dt {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #6b7280;
+  margin: 0 0 0.375rem 0;
+}
+
+.kpiCard dd {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.currencyList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.emptyValue {
+  font-size: 0.9375rem;
+  font-weight: 400;
+  color: #6b7280;
+}
+
+.disclosure {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: #6b7280;
+}
+
+/* Milestone 3.5C — Deals by Stage overview. Chips wrap via flexbox, never
+ * requiring horizontal scroll on narrow viewports. */
+
+.pipelineGroup {
+  margin-bottom: 1.25rem;
+}
+
+.pipelineGroup:last-child {
+  margin-bottom: 0;
+}
+
+.pipelineGroupHeading {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+}
+
+.stageChipList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.stageChip {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.stageChipName {
+  font-weight: 500;
+}
+
+.stageChipCount {
+  font-weight: 600;
+  color: #374151;
+  background: #f3f4f6;
+  border-radius: 999px;
+  padding: 0.0625rem 0.5rem;
+  min-width: 1.5rem;
+  text-align: center;
+}
+
+/* Milestone 3.5D — High-Score Contacts. Rows wrap via flexbox, never
+ * requiring horizontal scroll on narrow viewports. */
+
+.contactList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.contactRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.875rem;
+}
+
+.contactRow:last-child {
+  border-bottom: none;
+}
+
+.contactName {
+  font-weight: 600;
+  min-width: 8rem;
+}
+
+.contactEmail {
+  color: #6b7280;
+  word-break: break-word;
+}
+
+.contactScore {
+  font-weight: 500;
+}
+
+.contactComputedAt {
+  color: #6b7280;
+  font-size: 0.8125rem;
+  margin-left: auto;
+}
+
+/* Milestone 3.5F — Recently Created Deals. Rows wrap via flexbox, never
+ * requiring horizontal scroll on narrow viewports. */
+
+.dealList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dealRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 0.875rem;
+}
+
+.dealRow:last-child {
+  border-bottom: none;
+}
+
+.dealLabel {
+  font-weight: 600;
+  min-width: 8rem;
+}
+
+.dealStatus {
+  font-weight: 500;
+}
+
+.dealAmount {
+  color: #6b7280;
+}
+
+.dealCreatedAt {
+  color: #6b7280;
+  font-size: 0.8125rem;
+  margin-left: auto;
+}

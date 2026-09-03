@@ -5112,6 +5112,256 @@ milestone's own scope, not a partial implementation of a broader one.
 
 ---
 
+## Milestone 3.5 — Overall Closeout
+
+**Milestone 3.5 — Revenue Dashboard v1.** **Status: COMPLETE — pending
+commit.** Delivered as sub-phases 3.5A through 3.5F (dashboard-metrics
+domain foundation in `packages/crm`/`packages/intelligence`; the deal
+KPI row; Deals by Stage; Lead Intelligence; Identified Visitor
+Intelligence; Recently Created Deals), followed by **one** read-only
+Final Implementation Acceptance Audit — independent, adversarial,
+re-deriving every claim from source and from fresh reproductions
+against real Postgres rather than trusting the six sub-phases' own
+implementation reports — which found **zero BLOCKER, zero HIGH, zero
+MEDIUM** findings, exactly two LOW findings and two informational
+limitations (both preserved below, not silently resolved), and returned
+**GO**. As of this closeout the working tree is clean against
+`origin/main` (`086a79b30c5668a3cb7628c82a7b9666636ebe9f`) with the
+milestone's files staged as untracked/modified — **not yet committed or
+pushed**.
+
+### Architecture
+
+Read-only from end to end. `/dashboard` (`apps/web/app/dashboard/
+page.tsx`) is a Server Component calling `packages/crm`/`packages/
+intelligence` domain functions **in-process** (ADR-004's own "no
+unnecessary network hop" reasoning, one layer up) — never a browser
+`fetch()` to this app's own API, and this milestone added **zero** new
+API route, zero new migration, zero new permission, zero chart
+dependency. Each dashboard section is a thin, dedicated pure-function
+"view model" (`kpi-view-model.ts`, `stage-overview-view-model.ts`,
+`lead-score-distribution-view-model.ts`, `high-score-contacts-view-model.ts`,
+`recent-deals-view-model.ts`) transforming an already-computed domain
+result into display strings — no aggregation, re-sorting, or SQL of any
+kind lives in `apps/web`. Two small content-gate helpers
+(`kpi-access.ts`'s `canViewDealKpis`, `lead-intelligence-access.ts`'s
+`canViewLeadIntelligence`) wrap the existing `can()` facade and are
+reused, unmodified, across every sub-phase that shares their
+underlying permission — `canViewLeadIntelligence` alone gates both Lead
+Intelligence and Identified Visitor Intelligence.
+
+### Domain/data model — no migration
+
+`packages/crm/src/dashboard-metrics.ts` (`getDealDashboardMetrics`) and
+`packages/intelligence/src/dashboard-metrics.ts`
+(`getLeadScoreDistribution`, `getHighScoreContacts`,
+`getIdentifiedVisitorMetrics`) are the entire new domain surface — each
+a single-purpose SQL aggregate query (or a small fixed set of them)
+against tables that already existed: `deals`/`pipelines`/
+`pipeline_stages` (§2.2), `lead_scores` (§2.3), `website_visitors`/
+`visitor_identifications` (§2.3). `listDeals` (§2.5, unmodified since
+Milestone 2.2) is reused as-is for "Recently Created Deals" — no new
+query was written for it. Live-Postgres index inspection at 3.5A found
+every needed `organization_id`-leading index already present; **no
+migration was added anywhere in this milestone**.
+
+### Dashboard UI
+
+Five sections, added in this order: **Deals overview** (Open Deals,
+Open Pipeline Value, Win Rate, Average Open Deal Size), **Deals by
+Stage**, **Lead Intelligence** (Lead Score Distribution, High-Score
+Contacts), **Visitor Intelligence** (Identified Visitors — Last 30
+Days), **Recently Created Deals**. Deliberately **not** built as a
+second `packages/ui` `PipelineBoard`-shaped operational surface anywhere
+— every section is small, semantic, read-only markup reusing plain CSS
+Modules (`dashboard.module.css`), with the KPI/stage/contact/deal rows
+each getting their own honestly-named CSS classes rather than a shared
+component whose name would misdescribe a differently-shaped row. No
+chart library anywhere; every number renders as exact text.
+
+### Authorization
+
+Deal-shaped sections (KPI, Deals by Stage, Recently Created Deals) reuse
+the existing `deals:read` grant unchanged; Lead Intelligence and Visitor
+Intelligence reuse the existing `contacts:read` grant unchanged — **no
+new permission was created for this milestone.** The gate is
+content-only, never a page-level redirect: `/dashboard` remains
+reachable by every authenticated user regardless of role, since it is
+both the universal landing page and the fallback redirect target every
+console page's own `decideXConsoleAccess` already uses on denial —
+redirecting away from `/dashboard` itself on a missing permission would
+loop `agency_owner`/`agency_admin`/`portal_customer` straight back to
+the page that just sent them there. A denied section's own domain call
+sits inside the identical boolean ternary that gates its JSX — verified
+directly in source, not merely by convention, so a partial-gating bug
+(query fires, markup hidden) is structurally impossible to introduce
+silently. `organizationId` is server-resolved exactly like every other
+page in this app; no dashboard code path accepts it from a query
+parameter, cookie, or request body.
+
+### Currency/value semantics
+
+Every monetary aggregate is grouped by currency and returned as a
+per-currency array — **currencies are never summed together anywhere in
+this milestone**, and no conversion mechanism exists. `NULL` amount is
+never treated as zero (a dedicated disclosure surfaces how many open
+deals have no amount set); a genuine numeric zero remains a real,
+distinguishable zero throughout. Win Rate is `won / (won + lost)`, open
+deals never diluting the denominator; zero closed deals renders a
+truthful "No closed deals yet," never a fabricated `0%`. **The word
+"revenue" is never used for a deal-value metric** — Open Pipeline Value
+and Won Deal Value are the only terms used, precisely because no
+realized-revenue ledger exists in this schema (§2.6's own Milestone 3.5
+note). No forecast, velocity, weighted-pipeline, or revenue-history view
+was built — none of those are truthfully derivable without a
+stage-transition-history table or a closed-date column, neither of
+which exists.
+
+### Lead intelligence
+
+Both `getLeadScoreDistribution` and `getHighScoreContacts` select only
+each contact's latest historized `lead_scores` row (`DISTINCT ON
+(contact_id) ... ORDER BY contact_id, computed_at DESC, id DESC`) — a
+contact scored A, then later D, counts exactly once, as D, independently
+reproduced against real Postgres during the closeout audit. Soft-deleted
+contacts are excluded via the join to `contacts`. High-score ordering
+(`score DESC, computed_at DESC, contact_id ASC`) is bounded and never
+re-sorted in `apps/web`. Rendered fields are the fixed, minimal accepted
+projection — name/email/score/grade/computed-at — never a scoring-rule
+breakdown or raw enrichment payload. This dashboard is **not** an AI
+scoring surface: Milestone 3.4's scoring remains deterministic and
+rules-based only; nothing in Milestone 3.5 changes that.
+
+### Visitor intelligence
+
+"Identified Visitors — Last 30 Days" means exactly what it says and
+nothing more: currently-identified visitors (`identified_contact_id IS
+NOT NULL`) whose own most recent `visitor_identifications` row with
+`event_type = 'identified'` falls within the fixed 30-day window.
+`website_visitors.first_seen_at` is never used as an identification
+timestamp — independently re-verified against real Postgres with all
+four hostile timing fixtures (recent-row/old-identification excluded;
+old-row/recent-identification included; never-identified excluded;
+cross-tenant excluded), plus a fifth proving a withdrawn visitor is
+excluded even when the withdrawal itself is recent. The window is a
+literal server-side constant; no query parameter or client state can
+influence it. The dashboard deliberately renders only this windowed
+count, not the domain function's separate unwindowed all-time total —
+rendering both under one "Last 30 Days" heading would risk
+misrepresenting what either number proves.
+
+### Recent deals
+
+"Recently Created Deals" — a bounded, fixed-limit-5 list ordered
+`created_at DESC` with a deterministic `id DESC` tie-break, reusing
+`listDeals` completely unmodified. Explicitly **not** an activity log,
+stage-history, or win/close-date view: only `createdAt` is read
+anywhere in `recent-deals-view-model.ts`; `updatedAt` never appears in
+that file and does not affect order (independently reproduced with a
+deal whose `updatedAt` was bumped to "now"). Status is a pure 1:1
+lookup over the domain's already-derived value, never re-derived here.
+`NULL` amount renders "No amount"; a genuine zero renders as a real
+zero. Each deal's own currency is shown independently — no aggregation
+across rows. The row label reuses the existing `dealDisplayLabel`
+fallback (`deals` has no title column) — an unambiguous system-generated
+`Deal <id prefix>` string, never mistakable for a real user-authored
+title.
+
+### Privacy/security
+
+See `08-Security.md`'s own new Milestone 3.5 bullet (§5) for the full,
+durable statement. In summary: no new permission, no `SECURITY
+DEFINER` function, no service-role bypass, no browser-side aggregation
+of any kind. Every rendered field was independently inventoried during
+the closeout audit — no `organizationId`, workflow ID, anonymous
+visitor ID, raw enrichment payload, lead-score breakdown, or scoring-rule
+internal ever reaches rendered markup; every ID used as a React list
+`key` (`dealId`, `pipelineId`, `stageId`, `contactId`) was confirmed used
+only as that key, never interpolated into visible text.
+
+### Performance/query behavior
+
+Exactly one call each per authorized page load —
+`getDealDashboardMetrics`, `listDeals`, `getLeadScoreDistribution`,
+`getHighScoreContacts`, `getIdentifiedVisitorMetrics` — verified by
+direct source-pattern count, not assumed. No N+1 pattern, no SQL string
+anywhere in `apps/web`. Fresh `EXPLAIN (ANALYZE, BUFFERS)` against real
+local Postgres confirmed `listDeals`'s production query uses the
+existing `deals_org_active_idx`; no missing-index defect was found
+anywhere in this milestone, and no index was added.
+
+### Verification
+
+**One** independent, read-only, adversarial Final Implementation
+Acceptance Audit was performed after all six sub-phases (3.5A–F) —
+re-reading every implementation file fresh rather than trusting the six
+prior sub-phase reports, reconstructing the shipped dashboard directly
+from source, building the complete role × section authorization matrix
+from `packages/auth/src/permissions.ts` itself, and independently
+reproducing 18 hostile scenarios directly against real Postgres using
+raw SQL copied verbatim from the actual production queries — mixed
+currencies, NULL vs. numeric-zero amount, zero-closed-deals, closed-
+with-zero-wins, multiple pipelines, a zero-count stage, a soft-deleted
+deal, a soft-deleted stage with a surviving deal, a cross-tenant deal, an
+A→D lead-score history, a cross-tenant lead score, old-visitor/recent-
+identification, recent-visitor/old-identification, a consent-withdrawn
+visitor, a cross-tenant visitor, a `created_at`-tied recent-deals pair
+with an independent `id DESC` ground-truth comparison, and an
+`updated_at`-newer-than-`created_at` ordering case — **18/18 passed.**
+
+- `pnpm turbo run test` (fresh, uncached): **2992/2992** across all 8
+  packages (database 743, ui 39, auth 477, tenancy 46, compliance 52,
+  crm 329, intelligence 150, web 1156).
+- `pnpm lint`/`typecheck`/`build`: clean across all 9 packages.
+- Dedicated regression at closeout: `dashboard.test.ts` **98/98**,
+  `packages/crm`'s `dashboard-metrics.test.ts` **14/14**,
+  `packages/intelligence`'s `dashboard-metrics.test.ts` **16/16**.
+- `git diff --check`: clean.
+- No fresh `supabase db reset` was performed for this closeout — the
+  CLI was unavailable in the audit environment, and a manual full-schema
+  truncate was judged disproportionately destructive for what the audit
+  instructions framed as a preference, not a requirement. The full suite
+  instead ran fresh (not cache-replayed) against the existing,
+  purely-additive local dev database. Not a fabricated result — disclosed
+  explicitly as an informational limitation, below.
+
+### Remaining Findings (preserved, not fixed this milestone)
+
+- **LOW** — Deals by Stage has no disclosure mechanism, analogous to the
+  KPI section's own null-amount note, for the case where an open deal
+  sits on a since-soft-deleted stage: it remains counted in the
+  top-level Open Deals KPI while disappearing from the visible stage
+  groups. Both numbers are individually accurate (they answer different
+  questions); this is a narrow, inherited, cross-section transparency
+  gap, not a wrong-number defect. `/deals/board` already has an
+  established "Deleted stage" holding-column precedent this dashboard
+  section does not mirror.
+- **LOW** — the 3.5F automated test for the Recently Created Deals
+  `id DESC` tie-break does not, on its own, prove that specific rule —
+  it proves set-membership (via a sorted-both-sides comparison) and
+  repeatability only, which would also pass under a different, incorrect
+  tie-break rule. The production SQL itself was independently verified
+  correct during the closeout audit (a real ground-truth `ORDER BY id
+  DESC` comparison against a deliberately `created_at`-tied pair) — this
+  is a test-rigor/maintainability gap, not a shipped-behavior defect.
+- **Informational** — no browser-level responsive/accessibility
+  verification exists for any Milestone 3.5 UI — consistently disclosed
+  at every sub-phase and at closeout, matching this repository's own
+  established `packages/ui` testing-limitation precedent (no jsdom/
+  `@testing-library` in this dependency tree).
+- **Informational** — the closeout audit's full-suite run did not follow
+  a fresh `supabase db reset` (CLI unavailable in that environment); see
+  Verification above.
+
+**Milestone 3.5: PASS.** A read-only Revenue Dashboard v1 — deal KPIs,
+Deals by Stage, Lead Intelligence, Identified Visitor Intelligence, and
+Recently Created Deals, all organization-wide, currency-honest, and
+tenant-isolated — is live; no realized-revenue ledger, forecast, chart,
+or new API surface was built, and none of those was ever part of this
+milestone's own accepted scope.
+
+---
+
 ## Overall Phase 1 Recommendation
 
 | Milestone | Verdict |

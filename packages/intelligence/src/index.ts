@@ -57,3 +57,11 @@ export {
   type CreateScoringRuleInput,
   type UpdateScoringRuleInput,
 } from "./scoring";
+export {
+  getLeadScoreDistribution,
+  getHighScoreContacts,
+  getIdentifiedVisitorMetrics,
+  type LeadScoreDistribution,
+  type HighScoreContact,
+  type IdentifiedVisitorMetrics,
+} from "./dashboard-metrics";

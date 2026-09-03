@@ -121,3 +121,9 @@ export {
   DuplicateTaggingError,
 } from "./errors";
 export { DEFAULT_LIMIT, MAX_LIMIT, type Page, type Cursor } from "./pagination";
+export {
+  getDealDashboardMetrics,
+  type DealDashboardMetrics,
+  type CurrencyAmount,
+  type DealsByStageMetric,
+} from "./dashboard-metrics";

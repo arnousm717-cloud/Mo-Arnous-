@@ -118,12 +118,14 @@ Each domain grouping below is owned by the correspondingly-named package in `02-
 
 ### 2.6 Revenue
 
+**Milestone 3.5 note — none of the four tables below exist; Revenue Dashboard v1 was built without them (delivered)**: this table's own original design assumed a realized-revenue ledger (`revenue_events`) would exist by the time a "Revenue Dashboard" shipped. It does not — no migration in this repository has ever created `proposals`/`proposal_line_items`/`subscriptions`/`revenue_events`, verified directly against every migration file, not assumed from this document. Milestone 3.5's actual Revenue Dashboard v1 (`docs/13-Technical-Design-Review.md` "Milestone 3.5 — Overall Closeout") is built entirely from tables that already existed — `deals`/`pipelines`/`pipeline_stages` (§2.2), `lead_scores` (§2.3), `website_visitors`/`visitor_identifications` (§2.3) — via read-only aggregate queries in `packages/crm`/`packages/intelligence` (`dashboard-metrics.ts` in each). Consequently the dashboard never uses the word "revenue" for a deal-value metric (Open Pipeline Value/Won Deal Value only, never combined across currency), and ships no forecast/velocity/weighted-pipeline/revenue-history view, since none of that is truthfully derivable without the closed-date/history columns this section's original design would have required. The four tables below remain a documented, unbuilt placeholder for a possible future real revenue/billing ledger — not part of Milestone 3.5.
+
 | Table | Key Columns | Notes |
 |---|---|---|
-| `proposals` | `id`, `organization_id`, `deal_id`, `title`, `status` (`draft`/`sent`/`viewed`/`accepted`/`declined`), `total_amount`, `currency`, `deleted_at`, timestamps | |
-| `proposal_line_items` | `id`, `proposal_id`, `description`, `quantity`, `unit_price`, `sort_order` | |
-| `subscriptions` | `id`, `agency_id` or `organization_id`, `stripe_subscription_id`, `plan`, `status`, `current_period_end` | Platform's own billing of agencies/orgs |
-| `revenue_events` | `id`, `organization_id`, `deal_id` (nullable), `type` (`deal_won`/`subscription_charged`), `amount`, `currency`, `occurred_at` | Feeds the Revenue Dashboard |
+| `proposals` | `id`, `organization_id`, `deal_id`, `title`, `status` (`draft`/`sent`/`viewed`/`accepted`/`declined`), `total_amount`, `currency`, `deleted_at`, timestamps | Not built |
+| `proposal_line_items` | `id`, `proposal_id`, `description`, `quantity`, `unit_price`, `sort_order` | Not built |
+| `subscriptions` | `id`, `agency_id` or `organization_id`, `stripe_subscription_id`, `plan`, `status`, `current_period_end` | Platform's own billing of agencies/orgs. Not built |
+| `revenue_events` | `id`, `organization_id`, `deal_id` (nullable), `type` (`deal_won`/`subscription_charged`), `amount`, `currency`, `occurred_at` | Would feed a realized-revenue ledger view if built. Not built — Milestone 3.5's Dashboard v1 uses no realized-revenue table of any kind; see the note above |
 
 ### 2.7 Customer Portal
 

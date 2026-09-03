@@ -1091,3 +1091,118 @@ sign-off**
 - **Milestone 3.4 status: PASS** (`docs/13-Technical-Design-Review.md`
   "Milestone 3.4 — Overall Closeout"). Not yet committed or pushed as of
   this entry.
+
+## Milestone 3.5 — Revenue Dashboard v1
+
+**Added**
+- **`/dashboard` rebuilt from the bare M1.3-era shell into five
+  organization-wide, read-only sections**, each calling `packages/crm`/
+  `packages/intelligence` domain functions in-process from a Server
+  Component — no new API route, no browser-side `fetch()`, no chart
+  library, anywhere in this milestone:
+  - **Deals overview** — Open Deals (count), Open Pipeline Value and
+    Average Open Deal Size (both grouped per currency, never combined,
+    NULL amounts excluded from the sum/average and explicitly
+    disclosed, never silently treated as zero), Win Rate
+    (`won / (won + lost)`, open deals never diluting the denominator,
+    `null`/"No closed deals yet" on a zero denominator rather than a
+    fabricated `0%`). Deal-value terminology only — never "revenue,"
+    "MRR," or "ARR" — since no realized-revenue ledger exists in this
+    schema.
+  - **Deals by Stage** — every non-deleted pipeline/stage represented,
+    including a stage with zero deals; grouped by pipeline so two
+    identically-named stages in different pipelines stay distinct.
+  - **Lead Intelligence** — grade distribution (A/B/C/D) and a bounded
+    top-5 high-score contact list, both derived from `lead_scores`'
+    latest row per contact only (`DISTINCT ON`), never double-counting a
+    contact whose score changed over time; exposes only name/email/
+    score/grade/computed-at, never a scoring breakdown or raw
+    enrichment payload.
+  - **Identified Visitor Intelligence** — a single "Identified Visitors
+    — Last 30 Days" count, timestamped from each visitor's own latest
+    `visitor_identifications` `event_type='identified'` row, never
+    `website_visitors.first_seen_at`.
+  - **Recently Created Deals** — a fixed-limit-5 list ordered
+    `created_at DESC` with a deterministic `id DESC` tie-break, reusing
+    `listDeals` (Milestone 2.2) completely unmodified — not an activity
+    log, not a win/close-date history.
+- **New domain-layer read functions, zero new migration**:
+  `getDealDashboardMetrics` (`packages/crm/src/dashboard-metrics.ts`),
+  `getLeadScoreDistribution`/`getHighScoreContacts`/
+  `getIdentifiedVisitorMetrics` (`packages/intelligence/src/dashboard-
+  metrics.ts`) — each a small, fixed set of SQL aggregate queries
+  against tables that already existed, tenant-scoped via the same
+  `withTenantContext` mechanism every other domain function already
+  uses. A live-Postgres index audit at the start of this milestone found
+  every needed index already present.
+- **Authorization reuses two existing permissions, introduces none**:
+  deal-shaped sections gate on the existing `deals:read` grant; Lead
+  Intelligence and Visitor Intelligence both gate on the existing
+  `contacts:read` grant. The gate is content-only — `/dashboard` itself
+  stays reachable by every authenticated user regardless of role,
+  since it is the universal landing page and the fallback redirect
+  target every console page's own access decision already uses.
+
+**Fixed**
+- No implementation defect required remediation this milestone. The
+  Final Implementation Acceptance Audit (below) found zero BLOCKER,
+  HIGH, or MEDIUM findings — the two LOW findings it did surface are
+  recorded under Known gaps, not remediated as bugs, per the audit's own
+  explicit instruction not to silently fix or upgrade their severity.
+
+**Known gaps, explicitly deferred (not oversights)**
+- **LOW** — Deals by Stage has no disclosure mechanism, analogous to
+  the KPI section's own null-amount note, for the case where an open
+  deal sits on a since-soft-deleted stage: it stays counted in the
+  top-level Open Deals KPI while disappearing from the visible stage
+  groups. Both numbers are individually accurate; this is a narrow,
+  inherited, cross-section transparency gap, not a wrong-number defect.
+- **LOW** — the Recently Created Deals automated test for the `id DESC`
+  tie-break proves set-membership and repeatability only, not the
+  specific tie-break rule itself. The production SQL was independently
+  verified correct against real Postgres during the closeout audit — a
+  test-rigor gap, not a shipped-behavior defect.
+- **Informational** — no browser-level responsive/accessibility
+  verification exists for any Milestone 3.5 UI, consistent with this
+  repository's established no-jsdom testing-limitation precedent.
+- **Informational** — the closeout audit's final full-suite run did not
+  follow a fresh `supabase db reset` (the CLI was unavailable in that
+  environment); the suite instead ran fresh/uncached against the
+  existing, purely-additive local dev database.
+- No forecast, pipeline velocity, weighted-pipeline value, or
+  revenue-history trend view was built — none of those are truthfully
+  derivable without a stage-transition-history table or a closed-date
+  column, neither of which exists in this schema. Not a partial
+  implementation of a broader one; explicitly out of this milestone's
+  own accepted scope.
+
+**Closeout — final validation**
+- Full monorepo **2992/2992** tests passing across all 8 packages (ui
+  39, database 743, auth 477, compliance 52, crm 329, tenancy 46,
+  intelligence 150, web 1156), reproduced fresh (not cache-replayed).
+  `pnpm lint`/`typecheck`/`build` clean across all 9 packages.
+  `git diff --check` clean.
+- Dedicated regression suites at final sign-off: `dashboard.test.ts`
+  **98/98**, `packages/crm`'s `dashboard-metrics.test.ts` **14/14**,
+  `packages/intelligence`'s `dashboard-metrics.test.ts` **16/16**.
+- **One** independent, read-only, adversarial Final Implementation
+  Acceptance Audit was performed after all six sub-phases (3.5A–F) —
+  re-reading every implementation file fresh rather than trusting any
+  prior sub-phase report, reconstructing the complete role × dashboard-
+  section authorization matrix directly from `packages/auth/src/
+  permissions.ts`, and independently reproducing 18 hostile scenarios
+  against real Postgres with raw SQL copied verbatim from the actual
+  production queries (mixed currencies, NULL vs. numeric-zero amount,
+  zero-closed-deals, closed-with-zero-wins, multiple pipelines, a
+  zero-count stage, a soft-deleted deal, a soft-deleted stage with a
+  surviving deal, a cross-tenant deal, an A→D lead-score history, a
+  cross-tenant lead score, old-visitor/recent-identification, recent-
+  visitor/old-identification, a consent-withdrawn visitor, a
+  cross-tenant visitor, a `created_at`-tied recent-deals pair with an
+  independent `id DESC` ground-truth comparison, and an `updated_at`-
+  newer-than-`created_at` ordering case) — **18/18 passed**. Found
+  exactly two LOW findings and two informational limitations (all
+  above), zero BLOCKER/HIGH/MEDIUM, and returned **GO**.
+- **Milestone 3.5 status: PASS** (`docs/13-Technical-Design-Review.md`
+  "Milestone 3.5 — Overall Closeout"). Not yet committed or pushed as
+  of this entry.
