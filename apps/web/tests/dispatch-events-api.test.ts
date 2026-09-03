@@ -315,6 +315,39 @@ describe("End-to-end: visitor.identified -> dispatch -> n8n webhook (stand-in) -
     expect(workflowRunRows.rows[0]!.status).toBe("succeeded");
     expect(Number(workflowRunRows.rows[0]!.cost_usd)).toBe(0.01);
 
+    // Milestone 3.4C — the lead_scoring consumer runs in the SAME
+    // dispatch pass, off the same visitor.identified event, independently
+    // of lead_enrichment. Proves the actual dispatcher-registered
+    // consumer (not just the domain function directly) produces its own
+    // historized row for this event, via its own workflow_runs claim.
+    //
+    // Milestone 3.4 Targeted Acceptance Remediation (Finding 3) — a SECOND,
+    // independent lead_scores row is now also expected: recordEnrichmentResult's
+    // own durable post-enrichment scoring hook (workflow_key
+    // 'lead_scoring_post_enrichment') fires when the mock n8n server calls
+    // back into the real write-back endpoint below, reusing this same
+    // event's id as its own source_event_id. Two rows here is correct,
+    // not a duplicate-delivery bug: one reflects the score computed
+    // immediately at identify time, the other reflects it recomputed
+    // after the contact's enrichment data actually landed.
+    const leadScoreRows = await getPool().query(
+      "select id from public.lead_scores where organization_id = $1 and contact_id = $2 and source_event_id = $3",
+      [organizationId, contactId, eventId],
+    );
+    expect(leadScoreRows.rows).toHaveLength(2);
+    const scoringRunRows = await getPool().query(
+      "select status from public.workflow_runs where organization_id = $1 and workflow_key = 'lead_scoring' and source_event_id = $2",
+      [organizationId, eventId],
+    );
+    expect(scoringRunRows.rows).toHaveLength(1);
+    expect(scoringRunRows.rows[0]!.status).toBe("succeeded");
+    const postEnrichmentScoringRunRows = await getPool().query(
+      "select status from public.workflow_runs where organization_id = $1 and workflow_key = 'lead_scoring_post_enrichment' and source_event_id = $2",
+      [organizationId, eventId],
+    );
+    expect(postEnrichmentScoringRunRows.rows).toHaveLength(1);
+    expect(postEnrichmentScoringRunRows.rows[0]!.status).toBe("succeeded");
+
     // A second dispatch call must not re-deliver the same event to the
     // webhook — event_deliveries' own real idempotency guarantee (the
     // event is fully processed and no longer selected at all). Checked

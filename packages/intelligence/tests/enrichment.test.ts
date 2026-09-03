@@ -384,13 +384,19 @@ describe("recordEnrichmentResult: workflow_runs cost/duplicate-delivery accounti
     // first success, proving the second write was a structural no-op.
     expect(run2.attempt_count).toBe(run1.attempt_count);
 
-    // Only one workflow_runs row exists for this event -- no duplicate
-    // cost row was created either.
+    // Only one lead_enrichment workflow_runs row exists for this event --
+    // no duplicate cost row was created either. Scoped to workflow_key
+    // (Milestone 3.4 Targeted Acceptance Remediation, Finding 3): this
+    // same source_event_id now legitimately also carries its own,
+    // independent lead_scoring_post_enrichment row (recordEnrichmentResult's
+    // own durable scoring-retry claim) -- a second row under a DIFFERENT
+    // workflow_key is correct and expected, not the double-count this
+    // assertion actually guards against.
     const allRows = await seedAsAdmin((c) =>
-      c.query("select count(*)::int as n from public.workflow_runs where organization_id = $1 and source_event_id = $2", [
-        organizationId,
-        sourceEventId,
-      ]),
+      c.query(
+        "select count(*)::int as n from public.workflow_runs where organization_id = $1 and source_event_id = $2 and workflow_key = 'lead_enrichment'",
+        [organizationId, sourceEventId],
+      ),
     );
     expect(allRows.rows[0].n).toBe(1);
   });

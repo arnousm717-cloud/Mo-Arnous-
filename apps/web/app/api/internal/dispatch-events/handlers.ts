@@ -1,7 +1,12 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { dispatchPendingEvents, type DomainEvent, type EventConsumer } from "@ai-revenue-os/database";
-import { recordWorkflowRunStarted, recordWorkflowRunTriggerFailed } from "@ai-revenue-os/intelligence";
+import {
+  recordWorkflowRunStarted,
+  recordWorkflowRunTriggerFailed,
+  recalculateContactScoreForEvent,
+  recoverPendingPostEnrichmentScoring,
+} from "@ai-revenue-os/intelligence";
 import { apiError } from "../../v1/_shared/api-error";
 
 /**
@@ -125,6 +130,43 @@ const leadEnrichmentConsumer: EventConsumer = {
   },
 };
 
+/**
+ * Milestone 3.4C — the second consumer this dispatcher ships, triggered
+ * by the same visitor.identified event as lead_enrichment (registering
+ * two consumers for one event type is exactly what the Milestone 3.3
+ * processed_at fix hardened for — events.processed_at correctly waits
+ * for BOTH this consumer's own delivery and lead_enrichment's own,
+ * independently). Deliberately reuses workflow_runs for event-trigger
+ * deduplication (Milestone 3.4 Implementation Authorization) rather than
+ * any new mechanism — see recalculateContactScoreForEvent's own header
+ * comment for why lead_scores' historized design needs this extra,
+ * explicit claim layer that contact_enrichment's own monotonic upsert
+ * gets for free.
+ *
+ * `{accepted:false}` outcomes (a since-deleted contact, or a redelivered
+ * trigger already processed) are legitimate "nothing further to do"
+ * results, not failures — this handler does not throw for either, so the
+ * dispatcher marks the delivery as succeeded and never retries a
+ * pointless re-attempt. Only a genuine, unexpected exception (e.g. a
+ * transient DB error) propagates, which is exactly when a retry is
+ * actually useful.
+ */
+const leadScoringConsumer: EventConsumer = {
+  name: "lead_scoring",
+  eventTypes: ["visitor.identified"],
+  handle: async (event: DomainEvent) => {
+    const payload = event.payload as { organization_id: string; contact_id: string | null };
+    if (!payload.contact_id) {
+      return; // nothing to score for this event.
+    }
+
+    await recalculateContactScoreForEvent(
+      { organizationId: payload.organization_id },
+      { contactId: payload.contact_id, workflowKey: "lead_scoring", sourceEventId: event.id },
+    );
+  },
+};
+
 export async function handleDispatchEvents(request: Request): Promise<NextResponse> {
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) {
@@ -135,10 +177,28 @@ export async function handleDispatchEvents(request: Request): Promise<NextRespon
     return apiError("UNAUTHENTICATED", "Unauthorized", 401);
   }
 
+  let summary;
   try {
-    const summary = await dispatchPendingEvents([leadEnrichmentConsumer]);
-    return NextResponse.json({ summary }, { status: 200 });
+    summary = await dispatchPendingEvents([leadEnrichmentConsumer, leadScoringConsumer]);
   } catch {
     return apiError("INTERNAL_ERROR", "Dispatch failed", 500);
   }
+
+  // Milestone 3.4 Targeted Acceptance Remediation (Finding 3) — the same
+  // cron tick that drains the event outbox also sweeps for durable,
+  // stale/failed post-enrichment scoring retries (recordEnrichmentResult's
+  // own best-effort hook), reusing this route's existing schedule rather
+  // than a second cron entry. Isolated in its own try/catch: a failure
+  // here must never mask the dispatch summary above or turn an otherwise
+  // successful dispatch pass into a 500 — the pending rows it would have
+  // picked up simply remain pending for the next tick, exactly like a
+  // failed dispatch delivery already does.
+  let recovery: { attempted: number; succeeded: number } | null = null;
+  try {
+    recovery = await recoverPendingPostEnrichmentScoring();
+  } catch {
+    recovery = null;
+  }
+
+  return NextResponse.json({ summary, recovery }, { status: 200 });
 }

@@ -64,7 +64,7 @@ Paced for a solo founder building with AI assistance (`01-Vision.md`) — phases
 - Tracking script + the dedicated, unauthenticated public ingestion endpoint (`04-API-Architecture.md` §2 — a separate route outside `/api/v1/*` given its opposite security/traffic profile from the rest of the API), consent-gated
 - `website_visitors`, `visitor_sessions`, `visitor_events`, visitor identification logic
 - Company/Contact enrichment provider integration (via provider-agnostic adapter; the AI Revenue OS side — schema, service-authenticated write-back API, dispatch-trigger infrastructure — shipped in Milestone 3.3, `docs/13-Technical-Design-Review.md` "Milestone 3.3 — Overall Closeout"; the real provider-calling Lead Enrichment n8n workflow itself remains a later n8n workflow-authoring sub-phase, not part of that delivery), with `workflow_runs.cost_usd` tracked from this workflow's first run — since it's triggerable directly from the UI (not only via an agent), this is the first place provider cost needs a home outside `agent_tool_calls`
-- Rules-based lead scoring engine (`scoring_rules`, `lead_scores`)
+- Rules-based lead scoring engine (`scoring_rules`, `lead_scores`) — delivered in Milestone 3.4, `docs/13-Technical-Design-Review.md` "Milestone 3.4 — Overall Closeout": deterministic only, no AI/ML/agent involvement (that remains Phase 4's separate Scoring Agent persona scope, not part of this delivery)
 - Revenue Dashboard v1 (pipeline value, win rate, trend charts)
 
 **Deliverables**

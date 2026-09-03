@@ -1,6 +1,7 @@
 import { redirect, notFound } from "next/navigation";
 import { getAuthenticatedUser, resolveOrganizationContextForUser, can } from "@ai-revenue-os/auth";
 import { getCompanyByIdIncludingDeleted } from "@ai-revenue-os/crm";
+import { getLatestLeadScore } from "@ai-revenue-os/intelligence";
 import { handleGetContact } from "../../api/v1/contacts/[id]/handlers";
 import { decideContactsConsoleAccess } from "../access";
 import { listActiveCompanyOptions } from "../../_shared/company-options";
@@ -62,6 +63,11 @@ export default async function ContactDetailPage({
   const actor = { userId, organizationId, roleKey };
   const canUpdate = can(actor, "contacts:update");
   const canDelete = can(actor, "contacts:delete");
+  // Milestone 3.4E — read-only, no dashboard/rules-management UI here.
+  // Calls the domain layer directly (like getCompanyByIdIncludingDeleted
+  // above) rather than routing through the lead-scores HTTP handler, since
+  // this page already resolved and RBAC-checked its own actor.
+  const leadScore = await getLatestLeadScore(actor, contact.id);
   let companyOptions = canUpdate || contact.companyId ? await listActiveCompanyOptions(actor) : [];
   const ownerOptions = canUpdate || contact.ownerId ? await listActiveOwnerOptions(actor) : [];
 
@@ -119,6 +125,22 @@ export default async function ContactDetailPage({
           <dd>{resolveOwnerLabel(ownerOptions, contact.ownerId) ?? "—"}</dd>
         </dl>
       )}
+
+      <section className={styles.section}>
+        <h2>Lead score</h2>
+        {leadScore ? (
+          <dl className={styles.detailFields}>
+            <dt>Score</dt>
+            <dd>
+              {leadScore.score} ({leadScore.grade})
+            </dd>
+            <dt>Computed</dt>
+            <dd>{new Date(leadScore.computedAt).toLocaleString()}</dd>
+          </dl>
+        ) : (
+          <p>No score computed yet.</p>
+        )}
+      </section>
 
       {canDelete ? (
         <section className={styles.section}>

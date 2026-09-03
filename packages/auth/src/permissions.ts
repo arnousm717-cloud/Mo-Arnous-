@@ -68,7 +68,9 @@ export type PermissionKey =
   | "companies:agency-rollup-read"
   | "contacts:agency-rollup-read"
   | "deals:agency-rollup-read"
-  | "pipelines:agency-rollup-read";
+  | "pipelines:agency-rollup-read"
+  | "scoring-rules:read"
+  | "scoring-rules:write";
 
 export interface Actor {
   userId: string;
@@ -268,6 +270,13 @@ export const PERMISSION_MATRIX: Record<RoleKey, PermissionGrants> = {
     "tags:create": true,
     "tags:update": true,
     "tags:delete": true,
+    // Milestone 3.4D, same reasoning as tracking:manage-identity-keys and
+    // consent:record above: org_admin-only, no agency-scoped role gets
+    // it -- configuring the criteria that qualify a lead is a
+    // security/business-sensitive, per-organization decision (rule
+    // criteria influence which real people get prioritized for outreach).
+    "scoring-rules:read": true,
+    "scoring-rules:write": true,
   },
   org_member: {
     "organizations:read": true,

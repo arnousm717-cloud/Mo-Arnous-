@@ -901,3 +901,193 @@ re-verified from scratch before the next audit**
 - **Milestone 3.3 status: PASS** (`docs/13-Technical-Design-Review.md`
   "Milestone 3.3 — Overall Closeout"). Not yet committed or pushed as of
   this entry.
+
+## Milestone 3.4 — Rules-Based Lead Scoring
+
+**Added**
+- **`lead_scores`/`scoring_rules` (new)** — deterministic, contact-level-only
+  lead scoring; no company-level score exists or is planned, company
+  attributes are an input to the contact score only. `lead_scores` is
+  historized/insert-only (never updated in place) — `id`,
+  `organization_id`, `contact_id`, `score` (0–100, `CHECK`-bounded),
+  `grade` (`GENERATED ALWAYS AS ... STORED` — `A`≥80/`B`≥60/`C`≥40/`D`<40,
+  fixed v1 thresholds, not organization-configurable — structurally
+  incapable of drifting from `score`, no code path can ever insert a
+  mismatched pair), `breakdown` (jsonb — `{ruleId, field, operator,
+  matched, contribution}` tuples only, never free-text/raw PII beyond
+  what the same RLS-scoped staff reader already sees on the record
+  directly), `source_event_id`, `computed_at`. Composite tenant-safe FK
+  to `contacts`, `ON DELETE CASCADE` — a hard-erased contact's entire
+  score history is deleted with it. `scoring_rules` is organization-owned
+  configuration — `field` (11-value fixed allowlist), `operator` (9-value
+  fixed allowlist), `value` (jsonb), `weight` (bounded [-100,100]),
+  `is_active` (the sole enable/disable mechanism — no `deleted_at`, no
+  physical delete either, matching `contact_enrichment`/`workflow_runs`'
+  own no-physical-delete convention).
+- **Deterministic rule evaluator (`packages/intelligence/src/scoring.ts`,
+  `computeScore`)** — a fixed, hand-written TypeScript interpreter over a
+  plain, pre-loaded fact object. **No `eval`, no `new Function`, no
+  dynamic SQL construction from rule content, and no LLM/agent
+  involvement anywhere in this module** — a rule's `{field, operator,
+  value}` is strictly allowlisted data, never an executable expression.
+  Score is explicitly clamped to [0, 100] regardless of how many rules
+  matched, since a sum of individually-bounded weights can still exceed
+  either edge.
+- **`scoring-rules:read`/`scoring-rules:write` permissions** — `org_admin`
+  only, no agency-scoped role, same reasoning as
+  `tracking:manage-identity-keys` (Milestone 3.2B): configuring the
+  criteria that qualify a lead is a security/business-sensitive,
+  per-organization decision. `roles.permission_set` snapshot updated in
+  the same migration discipline as every prior permission addition.
+- **Staff APIs** — `GET /api/v1/contacts/{id}/lead-scores` (historized
+  series, `?latest=true` for the current score, `contacts:read`),
+  `POST /api/v1/contacts/{id}/lead-scores/recalculate` (on-demand
+  recompute, `contacts:update`), `GET`/`POST /api/v1/scoring-rules`,
+  `PATCH /api/v1/scoring-rules/{id}` (`scoring-rules:read`/`write`,
+  `org_admin` only). Strict field-allowlist request validation
+  (`scoring-rule-validation.ts`), mirroring `enrichment-validation.ts`'s
+  own established style.
+- **Read-only contact-detail Lead Score UI** — a "Lead score" section
+  added to the existing `contacts/[id]` page (score, grade, computed-at
+  timestamp, or "No score computed yet"), reading via the same
+  server-resolved, RBAC-checked actor the rest of the page already uses.
+  Deliberately no dashboard, no rules-management UI — out of this
+  milestone's scope.
+- **`visitor.identified` → `lead_scoring` dispatcher integration** — a
+  second `EventConsumer` (`lead_scoring`) registered alongside
+  `lead_enrichment` on the same event type, reusing `workflow_runs` for
+  event-trigger deduplication (an explicit, atomic claim —
+  `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE ...`, mirroring
+  `event_deliveries`' own lease acquire/reclaim pattern) rather than a
+  new mechanism, since `lead_scores`' historized/insert-only design has
+  no unique constraint to dedupe against for free the way
+  `contact_enrichment`'s own monotonic upsert does.
+- **Post-enrichment score recalculation, durably retryable** — a
+  successful `contact_enrichment`/`company_enrichment` write-back
+  recalculates that contact's score under its own distinct workflow key
+  (`lead_scoring_post_enrichment`, keyed by the write-back's own
+  `sourceEventId` — never the same key as the dispatcher-triggered path,
+  so no prior success can ever permanently block a later, genuinely new
+  attempt). `workflow_runs` gained a nullable, informational
+  `contact_id` column (additive migration, not a foreign key — same
+  reasoning as `source_event_id`) so a periodic recovery sweep
+  (`recoverPendingPostEnrichmentScoring`, invoked by the same cron tick
+  that already drives `dispatchPendingEvents`) can find and automatically
+  retry a failed or crashed-mid-flight attempt with no manual
+  intervention and no dependency on a future `visitor.identified` event.
+  Enrichment persistence is never coupled to scoring's own outcome — the
+  scoring call is a separate, best-effort step outside the write-back's
+  own transaction, structurally incapable of rolling it back.
+
+**Fixed — found by two dedicated Final Implementation Acceptance Audits,
+each remediated in a targeted pass, each independently re-verified before
+sign-off**
+- **HIGH** — the scoring-rule field-allowlist check used JavaScript's
+  `in` operator against a plain object, which consults the prototype
+  chain — `field: "__proto__"` (and `constructor`/`toString`/`valueOf`/
+  `hasOwnProperty`/etc.) passed the allowlist check, then crashed with an
+  uncaught `TypeError` two lines later. Reproduced end-to-end through the
+  real `POST`/`PATCH` handlers with a real `org_admin` session before any
+  fix — no row was ever written (the crash preceded the insert), but the
+  request failed as an unhandled exception rather than a clean `400`.
+  **Fixed**: both allowlist checks now use
+  `Object.prototype.hasOwnProperty.call(...)`, an own-property check
+  immune to prototype-chain lookup.
+- **MEDIUM** — the original post-enrichment scoring hook called the bare,
+  untracked scoring function inside a swallowed `try/catch` with no
+  durable record of the attempt — a thrown exception left zero trace,
+  and nothing was ever positioned to retry it. **Fixed** by the durable,
+  automatically-retried recovery mechanism described above, reusing the
+  existing `workflow_runs` claim/lease infrastructure and the existing
+  cron-driven dispatch route rather than inventing a second retry
+  system or a new event type (a new event type was considered and
+  rejected: `public.events` has zero grants to `authenticated`, so
+  emitting one would have required a new `SECURITY DEFINER` function —
+  an explicit stop condition — and a safe alternative existed).
+- A concurrency bug found and fixed during the same audit pass, ahead of
+  either numbered finding above: the dispatcher-triggered claim query
+  originally reclaimed a `'running'` row on a plain `status <>
+  'succeeded'` check, which does not exclude a genuinely still-in-flight
+  attempt — two truly concurrent callers could both "win" the same claim
+  and both insert a duplicate score. Reproduced directly against real
+  Postgres, then fixed with the same time-based lease-staleness
+  condition `event_deliveries`' own claim already enforces (120 seconds).
+- A final, fully independent, fully read-only Final Targeted
+  Implementation Acceptance Audit — hostile re-reproduction of both
+  fixes plus a full crash-window enumeration, tenant-isolation probe
+  against a deliberately malformed cross-org `workflow_runs` row, and a
+  fresh multi-consumer `processed_at` re-verification — found nothing
+  requiring further remediation and returned **GO**.
+
+**Known gaps, explicitly deferred (not oversights)**
+- **MEDIUM** — `recalculateContactScore` gathers facts, loads rules, and
+  inserts the historized score across three separate transactions, not
+  one atomic snapshot — a rule change or contact/company mutation
+  landing in the narrow window between them is not isolated by a single
+  point-in-time snapshot. No invariant is violated (no crash, no
+  corruption, no cross-tenant leak); the historized design already
+  treats drift as an accepted signal. Not fixed this milestone.
+- **LOW** — a process crash strictly between enrichment's own transaction
+  committing and the post-enrichment scoring claim's own `INSERT`
+  executing leaves no durable trace for that one specific attempt — the
+  narrowest possible inter-statement crash window, self-correcting via
+  any later legitimate trigger for the same contact.
+- **LOW/informational** — a crash after the score `INSERT` but before the
+  claim's own completion `UPDATE` can produce one additional accepted
+  historized row on stale retry — the same at-least-once bookkeeping
+  boundary already accepted for `event_deliveries` since Milestone 3.3,
+  not a new class of risk.
+- **LOW/informational** — `computeScore` itself performs no internal
+  clamping of a per-rule `weight`; fully mitigated by two independent
+  upstream gates (application validation's `Number.isInteger` check, and
+  the database column's `integer` type), neither of which a real code
+  path can bypass.
+- **Informational** — a malformed cross-organization `workflow_runs`
+  bookkeeping row (a `contact_id` claiming an `organization_id` it does
+  not actually belong to — reachable only by directly forging a row,
+  never through any real code path) fails closed on every retry attempt
+  and can never produce a cross-tenant score, but is retried indefinitely
+  since nothing distinguishes "permanently invalid" from "transient" in
+  the recovery sweep's own retry predicate.
+- No AI/agent-assisted scoring exists or was built — explicitly excluded
+  from this milestone's own accepted design (Implementation
+  Authorization), not a partial implementation of a broader one. Any
+  future agent-adjusted scoring is out of this milestone's scope
+  entirely.
+
+**Closeout — final validation**
+- Full monorepo **2864/2864** tests passing across all 8 packages (ui 39,
+  database 743, auth 477, compliance 52, crm 315, tenancy 46,
+  intelligence 134, web 1058) — reproduced clean under the repository's
+  literal standard `pnpm test` command, fresh and again against a real
+  accumulated backlog, both fully green, independently reproduced across
+  all three audit passes (initial acceptance, targeted remediation,
+  final targeted acceptance). `pnpm lint`/`typecheck`/`build` clean
+  across all 9 packages. Fresh `supabase db reset` applies all four
+  Milestone 3.4 migrations cleanly, in order, from a fully torn-down
+  local database.
+- Dedicated regression suites at final sign-off: `scoring.test.ts`
+  **25/25**, `scoring-adversarial.test.ts` **15/15**,
+  `lead-scoring-api.test.ts` **32/32**, `enrichment.test.ts` **21/21**,
+  `identify.test.ts` **28/28**, `enrichment-write-back-api.test.ts`
+  **12/12**, `dispatch-events-api.test.ts` **7/7**, `compliance-api.test.ts`
+  **25/25**, `track-consent-route.test.ts` and `track-identify.test.ts`
+  (consent/identification regression, unaffected).
+- **Two** independent, read-only, adversarial Final Implementation
+  Acceptance Audits were performed in sequence — the first found one
+  HIGH and one MEDIUM finding (the prototype-chain validation bug and
+  the untracked post-enrichment scoring hook, both described above),
+  remediated in one dedicated, narrowly-scoped pass with hostile
+  regression tests added and a real concurrency bug found and fixed
+  along the way; the second, fully independent, found nothing further
+  and returned **GO**. Every hostile scenario named across both audits —
+  prototype-chain field bypass against both `POST` and `PATCH`, the full
+  crash-window enumeration (before claim, after claim, during scoring,
+  after insert, after success), tenant isolation of the cross-org
+  recovery sweep against a deliberately malformed row, duplicate/
+  replayed recovery safety, and multi-consumer `processed_at`
+  correctness — was reproduced directly against real PostgreSQL, not
+  inferred from passing unit tests alone.
+- **Milestone 3.4 status: PASS** (`docs/13-Technical-Design-Review.md`
+  "Milestone 3.4 — Overall Closeout"). Not yet committed or pushed as of
+  this entry.

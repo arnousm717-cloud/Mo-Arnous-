@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { withTenantContext, type RequestContext } from "@ai-revenue-os/database";
+import { recalculateContactScoreForEvent, POST_ENRICHMENT_SCORING_WORKFLOW_KEY } from "./scoring";
 
 /**
  * Enrichment write-back domain layer (Milestone 3.3D, Milestone 3.3
@@ -85,7 +87,7 @@ export async function recordEnrichmentResult(
   ctx: RequestContext & { organizationId: string },
   input: RecordEnrichmentResultInput,
 ): Promise<RecordEnrichmentResultOutcome> {
-  return withTenantContext(ctx, async (client) => {
+  const outcome = await withTenantContext<RecordEnrichmentResultOutcome>(ctx, async (client) => {
     // Step 1: live re-check. A contact is rejected identically whether it
     // no longer exists at all (hard-erased, Milestone 3.2F-style GDPR
     // erasure — contacts genuinely undergo this) or still exists but is
@@ -205,6 +207,54 @@ export async function recordEnrichmentResult(
 
     return { accepted: true };
   });
+
+  // Milestone 3.4C, hardened by the Milestone 3.4 Targeted Acceptance
+  // Remediation (Finding 3) — a successful contact-entity write-back
+  // recalculates that contact's lead score, outside (after) the
+  // transaction above, on its own independent call — not nested inside
+  // it, matching the established composition style (recordWorkflowRunStarted
+  // is likewise always a separate call, never nested inside another
+  // function's own transaction).
+  //
+  // Deliberately best-effort at THIS call site: a scoring failure must
+  // never fail or roll back the enrichment write-back itself, so it is
+  // caught and swallowed here, never rethrown. What changed from the
+  // original 3.4C version: this no longer calls the bare, untracked
+  // recalculateContactScore — it goes through recalculateContactScoreForEvent,
+  // the same claim-based workflow_runs mechanism already proven for the
+  // dispatcher-triggered path, under its own distinct workflow key
+  // (POST_ENRICHMENT_SCORING_WORKFLOW_KEY). That claim durably records
+  // "running" the instant this call starts, so even a crash or an
+  // unexpected exception here leaves a real, stale-reclaimable row behind
+  // rather than silently losing the attempt — recoverPendingPostEnrichmentScoring()
+  // (invoked by the same cron tick that already drives dispatchPendingEvents,
+  // apps/web/app/api/internal/dispatch-events) sweeps for exactly these
+  // stale/failed rows and retries them automatically, with no manual
+  // recalculation and no dependency on a future, unrelated
+  // visitor.identified event ever arriving. sourceEventId reuses the
+  // original triggering event's id when this write-back is itself
+  // event-triggered (the common case); an on-demand write-back with no
+  // such id gets its own fresh, independent tracking key (matching
+  // workflow_runs' own pre-existing "a null source_event_id never
+  // conflicts with another" precedent for on-demand lead_enrichment runs
+  // — using a fresh random id here instead of a literal null is what
+  // makes THIS specific attempt independently findable by the recovery
+  // sweep even though it was never event-triggered).
+  if (outcome.accepted && input.entityType === "contact") {
+    try {
+      await recalculateContactScoreForEvent(ctx, {
+        contactId: input.entityId,
+        workflowKey: POST_ENRICHMENT_SCORING_WORKFLOW_KEY,
+        sourceEventId: input.sourceEventId ?? randomUUID(),
+      });
+    } catch {
+      // Swallowed deliberately — see comment above. The claim row already
+      // written (or left stale if the crash happened before it could
+      // complete) is what carries the retry forward, not this catch.
+    }
+  }
+
+  return outcome;
 }
 
 /**
