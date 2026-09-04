@@ -800,34 +800,75 @@ describe("transactional safety: audit-write failure rolls back the entire erasur
       { subjectType: "contact", subjectId: contact.id, requestType: "delete" },
     );
 
+    // CI #144: the chaos trigger/function used to be created and dropped as
+    // two separately-committed statements against public.audit_logs — a
+    // real, shared, cross-package table. Under full-monorepo test
+    // concurrency (every package's suite hitting the same local Postgres
+    // instance at once), that made the trigger briefly visible to, and
+    // capable of poisoning, any OTHER concurrently-running erasure call in
+    // a different package's test file, and made the cleanup DROP TRIGGER's
+    // required AccessExclusiveLock collide with a concurrent writer's
+    // RowExclusiveLock on the same table — a genuine, reproduced deadlock
+    // (docs/13-Technical-Design-Review.md "CI #144"). Fixed by running the
+    // chaos setup, the erasure attempt, and the cleanup as ONE never-
+    // committed transaction on a single connection: `execute_contact_
+    // erasure()` is called with that same client as its existingClient
+    // (Milestone 2.5B's existing existingClient parameter — no production
+    // code change), so the trigger it depends on is visible only within
+    // this one session's own uncommitted work. A plain ROLLBACK at the end
+    // undoes the trigger/function creation and every attempted mutation
+    // together, in one atomic step — no DROP TRIGGER/DROP FUNCTION against
+    // globally-visible schema state, and nothing ever observable by another
+    // session, so no other test can be poisoned and no DDL lock is ever
+    // requested against live concurrent writers.
+    const chaosClient = await adminPool.connect();
     try {
-      await seedAsAdmin(async (client) => {
-        await client.query(`
-          create or replace function public._chaos_fail_contact_erasure_audit()
-          returns trigger language plpgsql as $$
-          begin
-            if new.action = 'data_subject_request.executed' and new.resource_type = 'contact' then
-              raise exception 'chaos-injected failure: contact erasure audit insert';
-            end if;
-            return new;
-          end;
-          $$;
-          create trigger _chaos_contact_erasure_audit_trigger
-            before insert on public.audit_logs
-            for each row execute function public._chaos_fail_contact_erasure_audit();
-        `);
-      });
+      await chaosClient.query("begin");
+      // Mirrors the one piece of withTenantContext's session setup that
+      // execute_contact_erasure()'s own authorization check actually reads
+      // — auth.uid() resolves purely from request.jwt.claims (see its own
+      // `select coalesce(current_setting('request.jwt.claim.sub', true),
+      // current_setting('request.jwt.claims', true)::jsonb->>'sub')`
+      // definition), independent of the SQL session role. Deliberately NOT
+      // doing withTenantContext's `set local role authenticated` here: this
+      // connection must stay superuser (adminPool's own role) so the chaos
+      // DDL below (CREATE FUNCTION/TRIGGER in the public schema) succeeds
+      // — `authenticated` has no DDL privilege there by design
+      // (20260811110000_harden_default_table_privileges.sql). A superuser
+      // caller bypasses execute_contact_erasure()'s own EXECUTE grant check
+      // the same way it bypasses every other privilege check, so this is
+      // still exercising the real SECURITY DEFINER function, unmodified.
+      await chaosClient.query(
+        "select set_config('request.jwt.claims', json_build_object('role', 'authenticated', 'sub', $1::text)::text, true)",
+        [admin],
+      );
 
-      await expect(executeContactErasure({ userId: admin }, dsr.id)).rejects.toThrow(
+      await chaosClient.query(`
+        create or replace function public._chaos_fail_contact_erasure_audit()
+        returns trigger language plpgsql as $$
+        begin
+          if new.action = 'data_subject_request.executed' and new.resource_type = 'contact' then
+            raise exception 'chaos-injected failure: contact erasure audit insert';
+          end if;
+          return new;
+        end;
+        $$;
+        create trigger _chaos_contact_erasure_audit_trigger
+          before insert on public.audit_logs
+          for each row execute function public._chaos_fail_contact_erasure_audit();
+      `);
+
+      await expect(executeContactErasure({ userId: admin }, dsr.id, chaosClient)).rejects.toThrow(
         /chaos-injected failure: contact erasure audit insert/,
       );
     } finally {
-      await seedAsAdmin(async (client) => {
-        await client.query(`
-          drop trigger if exists _chaos_contact_erasure_audit_trigger on public.audit_logs;
-          drop function if exists public._chaos_fail_contact_erasure_audit();
-        `);
-      });
+      try {
+        await chaosClient.query("rollback");
+      } catch {
+        // Rollback itself can fail if the connection is already broken —
+        // release() below still returns/discards it regardless.
+      }
+      chaosClient.release();
     }
 
     // Nothing must have taken effect — the contact must still exist and
