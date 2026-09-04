@@ -5379,3 +5379,203 @@ milestone's own accepted scope.
 **Every milestone is GO.** Three carry an explicit condition attached to *closing* that milestone (M1.2's pooling spike, M1.3's real email provider, M1.6's dry-run mode) — none of these block *starting* Phase 1, but none of the three affected milestones should be marked done without them. This is not a rubber stamp: the two highest-stakes items in the entire plan (the RLS/pooling mechanism in M1.2, and irreversible deletion in M1.6) are exactly where this panel is asking for evidence, not just code review, before sign-off.
 
 Implementation may begin at **M1.1**.
+
+---
+
+## Milestone 4.1 Phase 1 — Database + GDPR Foundation
+
+**Milestone 4.1 — Brain Foundation.** **Status: Phase 1 (Database + GDPR
+Foundation) ACCEPTED — pending commit. Milestone 4.1 as a whole, and
+Phase 4 as a whole, remain IN PROGRESS, not complete.** Delivered as a
+single implementation turn (pgvector, six-table Brain schema, RLS/grants,
+retention registration, GDPR erasure integration, database/adversarial
+tests), followed by a Final Implementation Acceptance Audit that
+returned **NO-GO** on two independently-reproduced defects, a targeted
+fix round addressing both, and a Final Re-Acceptance Audit that
+independently re-verified the fixes and returned **GO**. As of this
+entry the working tree is clean against `origin/main`
+(`cbafb5e4283978dc4439e6d5e3674aa42c35dff7`) with the phase's files
+staged as untracked/modified — **not yet committed or pushed**.
+
+### Scope actually authorized and delivered
+
+Database schema, tenant isolation, grants, retention registration, and
+GDPR/DSR erasure integration only. Explicitly **not** in scope this
+phase and **not built**: `packages/brain`, CRM domain-event emission
+for Brain ingestion, the backfill/bootstrap script, `brain_sync_state`
+integration, embedding generation, semantic search, any AI/model-
+provider dependency, Brain API routes/Server Actions/UI/RBAC
+permissions, and agent functionality of any kind.
+
+### Schema
+
+Six new tables (`docs/03-Database-Architecture.md` §2.9):
+`brain_knowledge_documents`, `brain_entity_profiles`,
+`brain_entity_profile_history`, `brain_embeddings`,
+`brain_embedding_entity_refs`, `brain_sync_state`. The entity-reference
+design deliberately deviates from this document's own original
+`docs/11-AI-Revenue-Brain.md` §4 proposal (an unstructured
+`brain_embeddings.entity_refs` jsonb array) in favor of a **relational,
+three-nullable-composite-FK** design — `contact_id`/`company_id`/
+`deal_id` (exactly one set, enforced by a `CHECK` matching
+`entity_type`) plus real composite tenant-safe FKs, `ON DELETE CASCADE`,
+per entity kind, and a new `brain_embedding_entity_refs` junction table
+for the many-to-many case — a stronger, DB-enforceable invariant over an
+application-trusted jsonb convention, at the accepted cost of not
+scaling cleanly past ~4-5 entity types. A previously-unverified schema
+gap was discovered and fixed as a prerequisite: `public.deals` had no
+`unique(organization_id, id)` constraint (unlike `companies`/`contacts`/
+`pipelines`/`pipeline_stages`), so no composite FK could target it —
+closed with the exact precedent already established for `contacts`
+(`20260814100000`), verified to fail against zero existing data.
+`brain_embeddings.embedding` is `vector(1536)`, nullable, schema-only —
+no provider selected, no row ever populated, no similarity index
+created.
+
+### Tenant isolation and grants
+
+Every Brain FK carrying a tenant-owned parent is a real composite
+`(organization_id, id)` FK, adversarially verified against real
+Postgres (not merely designed): cross-tenant parent attacks against
+`brain_entity_profiles`, `brain_embedding_entity_refs`, and
+`brain_embeddings` (via `brain_entity_profile_history`'s and
+`brain_embedding_entity_refs`'s own parent FKs) were all attempted live
+and rejected by the FK layer, independent of RLS. RLS is enabled on all
+six tables; `authenticated` holds ordinary `SELECT`/`INSERT`(/`UPDATE`
+on the three mutable tables) — no `DELETE` grant anywhere — with one
+deliberate exception: `brain_knowledge_documents` is **SELECT-only**
+for `authenticated` (see Knowledge documents, below). `anon` holds zero
+grants on any Brain table.
+
+### GDPR/DSR erasure — targeted-capture design (post-fix)
+
+The first implementation extended `execute_contact_erasure()` with a
+purge step that deleted a `brain_embeddings` row only if it currently
+had zero `brain_embedding_entity_refs` rows. The Final Implementation
+Acceptance Audit reproduced two live defects in this design against
+real Postgres: (1) **BLOCKER** — a chunk shared between the erased
+contact and a surviving company/deal ref was never deleted at all, so
+the erased contact's own personal data (name/email/phone, in the
+reproduction) remained fully readable in `chunk_text` after erasure;
+(2) **HIGH** — the "delete if currently orphaned" predicate was scoped
+to the whole organization, not to this specific erasure, so it could
+delete an unrelated, already-orphaned embedding that had nothing to do
+with the erased contact.
+
+The fix round replaced the design: `execute_contact_erasure()` now
+captures the exact set of `brain_embeddings` ids linked to the target
+contact (via `brain_embedding_entity_refs`) **before** the contact
+delete fires — while the linking evidence still exists — then, after
+the delete (which cascades away the contact's own FK-linked Brain rows
+structurally), deletes every captured embedding **in full**, even one a
+company/deal ref also points at. Deleting the embedding row cascades
+away any remaining refs on it. Because the delete is keyed by the
+captured id set rather than by "currently has zero refs," it can never
+reach an unrelated orphan or a knowledge-document-sourced chunk (which
+never receives an entity ref at all, by construction).
+
+Both the original defects and the fix were independently reproduced
+against live Postgres during the Final Re-Acceptance Audit: a hostile
+fixture with synthetic PII (name/email/phone) in a chunk shared between
+the erased contact and a company confirmed the chunk is now deleted in
+full and the PII unrecoverable anywhere in the organization; a same-
+organization unrelated zero-ref embedding, and one with its own valid
+company ref, both confirmed to survive byte-for-byte; a cross-
+organization embedding confirmed untouched; an empty-capture-set
+erasure (a contact with no Brain data at all) confirmed to succeed with
+no SQL error. The new regression tests were independently proven to
+fail against the original defective implementation (reinstalled live,
+never written to a file) before being confirmed to pass against the
+fix. `preview_contact_erasure()` was deliberately not extended, matching
+the established precedent that neither prior real cascade extension
+(2.3A, 3.2F) touched it either.
+
+### Knowledge documents — schema-only, no write path
+
+`brain_knowledge_documents.content_text` is free text with no
+deterministic entity linkage, so it cannot participate in the
+FK-driven/targeted-capture erasure design above. The Final Implementation
+Acceptance Audit flagged the original design (ordinary `authenticated`
+INSERT/UPDATE grants, no retention row, no erasure coverage) as a real,
+if not yet exploitable, compliance-scope gap — no application/API/UI
+write path exists, but the Postgres-level grant did. The fix round
+removed the INSERT/UPDATE grant and policy entirely, leaving this table
+**SELECT-only** for `authenticated` until a later milestone ships a
+compliant ingestion/DSR design (most likely a narrow `SECURITY DEFINER`
+write path with real content validation). Live-tested: `authenticated`
+SELECT succeeds; INSERT/UPDATE/DELETE/TRUNCATE all fail with a genuine
+grant-level `permission denied`, not an RLS/`current_org()`-unset
+artifact. No seed script or service-role path writes to this table
+today, independently verified by source search.
+
+### Retention
+
+`brain_entity_profiles`/`brain_entity_profile_history`/
+`brain_embeddings`/`brain_embedding_entity_refs` registered in
+`data_retention_policies` (2555-day platform default, verified live
+after a fresh reset). `brain_knowledge_documents` (no write path) and
+`brain_sync_state` (a cursor/watermark, no personal data) deliberately
+excluded, mirroring the `tags`/`taggings` precedent.
+
+### Future-ingestion invariant (documented, not enforced)
+
+`brain_entity_profiles.profile` (jsonb) carries no schema-level
+constraint against a company/deal profile embedding a specific
+contact's personal data — a comment directly on the column documents
+the invariant a future ingestion design must honor (deterministic
+contact provenance, or no cross-entity PII at all) before this column
+is ever populated. Comment-only, verified not to introduce any
+constraint, trigger, or behavior change — confirmed by full-file
+byte-level comparison against the pre-comment version.
+
+### Audit trail
+
+Three independent read-only audits ran against this implementation, in
+order: a Final Implementation Acceptance Audit (**NO-GO** — one
+BLOCKER, one HIGH, both reproduced live against real Postgres, not
+accepted on the strength of the implementation's own report), a
+targeted fix round (both defects fixed, three mandatory hostile
+regression tests added and proven falsifiable, knowledge-document
+grants corrected), and a Final Re-Acceptance Audit (independently
+re-derived every claim from source and fresh live reproduction rather
+than trusting the fix round's own report — **GO**, zero BLOCKER, zero
+HIGH remaining). A subsequent read-only comment-cleanup pass corrected
+two LOW-severity stale SQL comments left behind by the fix round
+(describing the replaced "purge orphans" design instead of the shipped
+targeted-capture design) — proven comment-only via full-file
+comparison, re-validated, **GO**.
+
+### Final validation (Final Re-Acceptance Audit, fresh)
+
+`packages/database` full suite **825/825** passed (35 files, up from
+819 pre-fix — 71 new Brain tests plus regression coverage added during
+the fix round). `packages/compliance` full suite **52/52** passed, no
+regression. Full monorepo test suite (cache bypassed): **8/8 tasks
+successful**, `apps/web` **1156/1156** passed. `pnpm lint`/`typecheck`
+(cache bypassed): **8/8 packages clean**. `git diff --check` clean
+throughout.
+
+### Deviations from the M4.1 Detailed Design
+
+1. `deals` gained `unique(organization_id, id)` — a schema gap
+   discovered during implementation, not anticipated by the Detailed
+   Design, fixed with an exactly-precedented additive prerequisite.
+2. Entity-reference design: relational three-nullable-composite-FK plus
+   a junction table, not the Detailed Design's/`docs/11`'s own original
+   jsonb-array proposal — see Schema, above.
+3. GDPR erasure design: targeted-capture, full-artifact deletion — not
+   the Detailed Design's originally-proposed "purge if orphaned"
+   approach, which the acceptance audit proved defective; see GDPR/DSR
+   erasure, above.
+4. `brain_knowledge_documents` shipped SELECT-only for `authenticated`,
+   not the Detailed Design's assumed ordinary RLS-scoped write grant —
+   a conservative correction made during the fix round, not part of the
+   original implementation authorization.
+
+**Milestone 4.1 Phase 1: PASS.** Database schema, tenant isolation,
+grants, retention, and GDPR erasure integration for the AI Revenue
+Brain are live, adversarially verified, and free of BLOCKER/HIGH
+findings. `packages/brain`, ingestion, embedding generation, semantic
+search, and every agent-facing capability remain unbuilt — Milestone
+4.1 is not complete, and Phase 4 has not materially progressed beyond
+this one foundation phase.

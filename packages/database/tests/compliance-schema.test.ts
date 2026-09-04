@@ -315,9 +315,18 @@ describe("data_retention_policies: read-only, platform defaults visible", () => 
     // 2.3") — "tags"/"taggings" are deliberately absent, see that
     // migration's own comment (tags are not personal data; taggings are
     // governed by physical deletion, not a time-based retention window).
+    // "brain_entity_profiles"/"brain_entity_profile_history"/
+    // "brain_embeddings"/"brain_embedding_entity_refs" joined in Milestone
+    // 4.1 Phase 1 (20260905090300) — "brain_knowledge_documents"/
+    // "brain_sync_state" are deliberately absent, see that migration's own
+    // comment.
     expect(rows.map((r) => r.data_type)).toEqual([
       "activities",
       "audit_logs",
+      "brain_embedding_entity_refs",
+      "brain_embeddings",
+      "brain_entity_profile_history",
+      "brain_entity_profiles",
       "consent_records",
       "contacts",
       "data_subject_requests",
