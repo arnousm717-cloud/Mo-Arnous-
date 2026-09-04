@@ -348,6 +348,63 @@ describe("listContacts", () => {
     expect(new Set(allIds).size).toBe(5);
   });
 
+  /**
+   * M4.1 Phase 2 pagination-precision correction (Final Re-Acceptance
+   * Audit BLOCKER). The cursor row itself (RowC, the sole item on page 1
+   * at limit=1) collides at millisecond precision with RowB (the row
+   * page 2 must correctly recover) — real Postgres `created_at` values
+   * differ only in the microsecond digits node-postgres's default
+   * `timestamptz` parser discards (`.200999` vs `.200111`, both `.200Z`
+   * as a JS Date). This is the exact shape independently reproduced
+   * against real Postgres before this fix (a 3-row case where the middle
+   * row was silently dropped from page 2). Goes through the REAL
+   * `listContacts` function end-to-end, not a raw-SQL replica.
+   */
+  it("a microsecond-only collision between the page-1 cursor row and page 2's own first row does not skip a row", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+
+    const ids = await seedAsAdmin(async (client) => {
+      // RowA: clearly the oldest, no collision.
+      const rowA = await client.query<{ id: string }>(
+        `insert into public.contacts (organization_id, first_name, email, created_at)
+         values ($1, 'RowA', $2, '2026-01-01 12:00:00.100000+00') returning id`,
+        [organizationId, `rowa-${randomUUID()}@example.test`],
+      );
+      // RowB and RowC collide at millisecond precision. RowC (newer) will
+      // be page 1's sole item (limit=1) and therefore the cursor row;
+      // RowB (older, but only by microseconds) must still be correctly
+      // recovered on page 2 — the exact pairing that silently dropped a
+      // row before this fix.
+      const rowB = await client.query<{ id: string }>(
+        `insert into public.contacts (organization_id, first_name, email, created_at)
+         values ($1, 'RowB', $2, '2026-01-01 12:00:00.200111+00') returning id`,
+        [organizationId, `rowb-${randomUUID()}@example.test`],
+      );
+      const rowC = await client.query<{ id: string }>(
+        `insert into public.contacts (organization_id, first_name, email, created_at)
+         values ($1, 'RowC', $2, '2026-01-01 12:00:00.200999+00') returning id`,
+        [organizationId, `rowc-${randomUUID()}@example.test`],
+      );
+      return { a: rowA.rows[0]!.id, b: rowB.rows[0]!.id, c: rowC.rows[0]!.id };
+    });
+
+    const page1 = await listContacts(ctx, { limit: 1 });
+    expect(page1.items).toHaveLength(1);
+    expect(page1.items[0]!.id).toBe(ids.c);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2 = await listContacts(ctx, { limit: 2, cursor: page1.nextCursor! });
+    const page2Ids = page2.items.map((c) => c.id);
+    // Before this fix: page2Ids was ['RowA'] only — RowB silently skipped.
+    expect(page2Ids).toEqual([ids.b, ids.a]);
+    expect(page2.nextCursor).toBeNull();
+
+    const allIds = [...page1.items, ...page2.items].map((c) => c.id);
+    expect(new Set(allIds)).toEqual(new Set([ids.a, ids.b, ids.c]));
+    expect(allIds).toHaveLength(3);
+  });
+
   it("filters by companyId", async () => {
     const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
     const ctx = { userId, organizationId, roleKey };
@@ -540,5 +597,60 @@ describe("owner validation shared with companies (cross-org, inactive, agency-on
     await expect(
       createContact({ userId, organizationId, roleKey }, { firstName: "Ada", ownerId: userId }),
     ).rejects.toThrow(InvalidOwnerError);
+  });
+});
+
+/**
+ * Milestone 4.1 Phase 2 — event emission (Detailed Design §E, Final Design
+ * Challenge §C). Each of the three authoritative mutation paths emits
+ * exactly the matching event, atomically with its own write.
+ */
+describe("Milestone 4.1 Phase 2: domain-event emission", () => {
+  async function eventCount(organizationId: string, eventType: string, contactId: string): Promise<number> {
+    return seedAsAdmin(async (client) => {
+      const r = await client.query<{ count: string }>(
+        "select count(*)::text as count from public.events where organization_id = $1 and event_type = $2 and payload->>'contact_id' = $3",
+        [organizationId, eventType, contactId],
+      );
+      return Number(r.rows[0]!.count);
+    });
+  }
+
+  it("createContact emits exactly one contact.created event", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const contact = await createContact({ userId, organizationId, roleKey }, { firstName: "Ada" });
+    expect(await eventCount(organizationId, "contact.created", contact.id)).toBe(1);
+  });
+
+  it("updateContact emits exactly one contact.updated event on a genuine field change", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const contact = await createContact(ctx, { firstName: "Ada" });
+    await updateContact(ctx, contact.id, { firstName: "Grace" });
+    expect(await eventCount(organizationId, "contact.updated", contact.id)).toBe(1);
+  });
+
+  it("updateContact with no actual field changes (empty patch) does not emit a second event", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const contact = await createContact(ctx, { firstName: "Ada" });
+    await updateContact(ctx, contact.id, {});
+    expect(await eventCount(organizationId, "contact.updated", contact.id)).toBe(0);
+  });
+
+  it("softDeleteContact emits exactly one contact.deleted event, never contact.updated", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const contact = await createContact(ctx, { firstName: "Ada" });
+    await softDeleteContact(ctx, contact.id);
+    expect(await eventCount(organizationId, "contact.deleted", contact.id)).toBe(1);
+    expect(await eventCount(organizationId, "contact.updated", contact.id)).toBe(0);
+  });
+
+  it("a failed softDeleteContact (nonexistent id) emits no event", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const fakeId = "00000000-0000-0000-0000-000000000000";
+    await softDeleteContact({ userId, organizationId, roleKey }, fakeId);
+    expect(await eventCount(organizationId, "contact.deleted", fakeId)).toBe(0);
   });
 });

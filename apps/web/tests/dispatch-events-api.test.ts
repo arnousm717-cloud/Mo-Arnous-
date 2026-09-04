@@ -4,7 +4,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closePool, getPool } from "@ai-revenue-os/database";
 import { generateApiKey } from "@ai-revenue-os/auth";
 import { identifyVisitor } from "@ai-revenue-os/intelligence";
-import { adminPool } from "./crm-api-fixtures";
+import { createContact, createCompany } from "@ai-revenue-os/crm";
+import { adminPool, createOrgWithRole } from "./crm-api-fixtures";
 import { handleDispatchEvents } from "../app/api/internal/dispatch-events/handlers";
 import { handleRecordContactEnrichment } from "../app/api/v1/contacts/[id]/enrichment/handlers";
 
@@ -38,6 +39,37 @@ process.env.DATABASE_URL ??= "postgresql://postgres:postgres@127.0.0.1:54322/pos
  */
 
 const CRON_SECRET_VALUE = "test-cron-secret-value";
+
+/**
+ * Milestone 4.1 Phase 2 test-reliability correction (M4.1 Phase 2 Final
+ * Implementation Acceptance Audit, MEDIUM finding). dispatchPendingEvents
+ * is tenant-agnostic and now scans across ten registered event types
+ * (visitor.identified plus the nine contact/company/deal types), not just
+ * one — Phase 2 wires real event emission into every packages/crm
+ * create/update/soft-delete call, so ordinary CRM test fixtures across
+ * this monorepo's OTHER packages (database, crm, intelligence, compliance
+ * — none of which ever call dispatchPendingEvents themselves) now leave
+ * real, permanently-pending events of these types behind in the same
+ * shared local Postgres this file also runs against.
+ *
+ * Measured directly (not guessed) against a freshly reset database: a
+ * full `pnpm test` run of every OTHER package ahead of apps/web in
+ * dependency order leaves ~463 such pending events; apps/web's own other
+ * 43 test files leave a further ~154 when run alone. The two numbers are
+ * not simply additive in every real run (this file's own earlier
+ * sub-tests already drain some backlog via their own dispatch calls
+ * before reaching the tests below), but a single combined worst-case
+ * budget generous enough to cover both sources with real headroom for
+ * suite growth is safer than trying to track two separate, drifting
+ * numbers. At DISPATCH_BATCH_SIZE = 10 events per tick
+ * (packages/database/src/events.ts), draining even a generously doubled
+ * ~1,200-event backlog needs at most 120 ticks — MAX_DISPATCH_DRAIN_ATTEMPTS
+ * below is set well above that. This does not change what the dispatcher
+ * does or how many events one call processes — only how many times these
+ * tests are willing to call it before giving up, which is the test's own
+ * concern, not production's.
+ */
+const MAX_DISPATCH_DRAIN_ATTEMPTS = 150;
 
 const ORIGINAL_CRON_SECRET = process.env.CRON_SECRET;
 const ORIGINAL_WEBHOOK_URL = process.env.N8N_LEAD_ENRICHMENT_WEBHOOK_URL;
@@ -218,7 +250,7 @@ async function identifyOne(organizationId: string, trackingSiteId: string): Prom
  * packages/database/tests/dispatcher.test.ts's own dispatchUntil()
  * establishes, applied here at the route/HTTP level.
  */
-async function dispatchUntilOwnTriggersReceived(organizationId: string, count: number, maxAttempts = 20): Promise<void> {
+async function dispatchUntilOwnTriggersReceived(organizationId: string, count: number, maxAttempts = MAX_DISPATCH_DRAIN_ATTEMPTS): Promise<void> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const own = receivedTriggerPayloads.filter((t) => t.organizationId === organizationId);
     if (own.length >= count) return;
@@ -261,7 +293,7 @@ describe("GET /api/internal/dispatch-events: lock-free concurrency (Milestone 3.
     expect(new Set(entityIds).size).toBe(entityIds.length);
     expect(entityIds).toContain(first.contactId);
     expect(entityIds).toContain(second.contactId);
-  }, 20000);
+  }, 90000);
 });
 
 describe("End-to-end: visitor.identified -> dispatch -> n8n webhook (stand-in) -> write-back -> workflow_runs", () => {
@@ -355,5 +387,48 @@ describe("End-to-end: visitor.identified -> dispatch -> n8n webhook (stand-in) -
     receivedTriggerPayloads = [];
     await handleDispatchEvents(dispatchRequest(`Bearer ${CRON_SECRET_VALUE}`));
     expect(receivedTriggerPayloads.find((t) => t.organizationId === organizationId)).toBeUndefined();
-  }, 30000);
+  }, 90000);
+});
+
+/**
+ * Milestone 4.1 Phase 2 — the three Brain projection consumers
+ * (contactProjectionConsumer/companyProjectionConsumer/dealProjectionConsumer,
+ * @ai-revenue-os/brain) are registered in this same dispatcher alongside
+ * the pre-existing leadEnrichmentConsumer/leadScoringConsumer, triggered by
+ * the new contact/company/deal domain events (never visitor.identified).
+ * Proves registration end-to-end through the real HTTP route, not just a
+ * direct consumer.handle() call (that path is covered by
+ * packages/brain/tests/ingestion.test.ts).
+ */
+describe("GET /api/internal/dispatch-events: Milestone 4.1 Phase 2 Brain projection consumers", () => {
+  async function dispatchUntilProfileExists(organizationId: string, column: "contact_id" | "company_id", entityId: string, maxAttempts = MAX_DISPATCH_DRAIN_ATTEMPTS): Promise<unknown> {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const row = await getPool().query(
+        `select id, profile from public.brain_entity_profiles where organization_id = $1 and ${column} = $2`,
+        [organizationId, entityId],
+      );
+      if (row.rows.length > 0) return row.rows[0];
+      const response = await handleDispatchEvents(dispatchRequest(`Bearer ${CRON_SECRET_VALUE}`));
+      expect(response.status).toBe(200);
+    }
+    return null;
+  }
+
+  it("a real contact.created event is dispatched to contactProjectionConsumer and produces a Brain profile", async () => {
+    const actor = await createOrgWithRole("org_admin", "brain-dispatch");
+    const contact = await createContact({ userId: actor.userId, organizationId: actor.organizationId, roleKey: actor.roleKey }, { firstName: "DispatchTest" });
+
+    const row = await dispatchUntilProfileExists(actor.organizationId, "contact_id", contact.id);
+    expect(row).not.toBeNull();
+    expect((row as { profile: { firstName: string } }).profile.firstName).toBe("DispatchTest");
+  }, 90000);
+
+  it("a real company.created event is dispatched to companyProjectionConsumer and produces a Brain profile", async () => {
+    const actor = await createOrgWithRole("org_admin", "brain-dispatch-company");
+    const company = await createCompany({ userId: actor.userId, organizationId: actor.organizationId, roleKey: actor.roleKey }, { name: "DispatchCo" });
+
+    const row = await dispatchUntilProfileExists(actor.organizationId, "company_id", company.id);
+    expect(row).not.toBeNull();
+    expect((row as { profile: { name: string } }).profile.name).toBe("DispatchCo");
+  }, 90000);
 });

@@ -64,6 +64,10 @@ interface TagRow {
   updated_at: string;
 }
 
+/** listTags-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — see packages/crm/src/pagination.ts's own header comment. */
+type TagListRow = TagRow & { created_at_cursor: string };
+
 const TAG_COLUMNS = `id, organization_id, name, color, deleted_at, created_at, updated_at`;
 
 function toTag(row: TagRow): Tag {
@@ -161,8 +165,8 @@ export async function listTags(
     }
     values.push(limit + 1);
 
-    const r = await client.query<TagRow>(
-      `select ${TAG_COLUMNS} from public.tags
+    const r = await client.query<TagListRow>(
+      `select ${TAG_COLUMNS}, created_at::text as created_at_cursor from public.tags
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,
@@ -280,6 +284,10 @@ interface TaggingRow {
   created_at: string;
 }
 
+/** listTaggings-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — see packages/crm/src/pagination.ts's own header comment. */
+type TaggingListRow = TaggingRow & { created_at_cursor: string };
+
 const TAGGING_COLUMNS = `id, organization_id, tag_id, taggable_type, taggable_id, created_at`;
 
 function toTagging(row: TaggingRow): Tagging {
@@ -393,8 +401,8 @@ export async function listTaggings(
     }
     values.push(limit + 1);
 
-    const r = await client.query<TaggingRow>(
-      `select ${TAGGING_COLUMNS} from public.taggings
+    const r = await client.query<TaggingListRow>(
+      `select ${TAGGING_COLUMNS}, created_at::text as created_at_cursor from public.taggings
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,

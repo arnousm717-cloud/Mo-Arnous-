@@ -7,6 +7,7 @@ import {
   recalculateContactScoreForEvent,
   recoverPendingPostEnrichmentScoring,
 } from "@ai-revenue-os/intelligence";
+import { contactProjectionConsumer, companyProjectionConsumer, dealProjectionConsumer } from "@ai-revenue-os/brain";
 import { apiError } from "../../v1/_shared/api-error";
 
 /**
@@ -179,7 +180,20 @@ export async function handleDispatchEvents(request: Request): Promise<NextRespon
 
   let summary;
   try {
-    summary = await dispatchPendingEvents([leadEnrichmentConsumer, leadScoringConsumer]);
+    summary = await dispatchPendingEvents([
+      leadEnrichmentConsumer,
+      leadScoringConsumer,
+      // Milestone 4.1 Phase 2 — Brain entity-profile projection, triggered
+      // by the nine contact/company/deal domain events (packages/crm),
+      // never by visitor.identified. Registering three consumers here is
+      // the same "one dispatcher, many independent consumers" pattern
+      // already proven for lead_enrichment/lead_scoring — events.processed_at
+      // correctly waits for every applicable consumer's own delivery,
+      // independently.
+      contactProjectionConsumer,
+      companyProjectionConsumer,
+      dealProjectionConsumer,
+    ]);
   } catch {
     return apiError("INTERNAL_ERROR", "Dispatch failed", 500);
   }

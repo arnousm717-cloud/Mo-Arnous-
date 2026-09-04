@@ -93,6 +93,10 @@ interface ActivityRow {
   updated_at: string;
 }
 
+/** listActivities-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — see packages/crm/src/pagination.ts's own header comment. */
+type ActivityListRow = ActivityRow & { created_at_cursor: string };
+
 const ACTIVITY_COLUMNS = `id, organization_id, type, related_to_type, related_to_id, subject, body,
    due_at, completed_at, created_by, deleted_at, created_at, updated_at`;
 
@@ -241,8 +245,8 @@ export async function listActivities(
     }
     values.push(limit + 1);
 
-    const r = await client.query<ActivityRow>(
-      `select ${ACTIVITY_COLUMNS} from public.activities
+    const r = await client.query<ActivityListRow>(
+      `select ${ACTIVITY_COLUMNS}, created_at::text as created_at_cursor from public.activities
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,

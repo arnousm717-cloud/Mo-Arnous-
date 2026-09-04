@@ -13,6 +13,48 @@ import { ValidationError } from "./errors";
  * after the cursor in that DESC ordering, i.e. (created_at, id) <
  * (cursor.createdAt, cursor.id) as a row comparison. No offset pagination
  * — avoids page-drift under concurrent writes (docs/04 §1).
+ *
+ * Precision correction (M4.1 Phase 2 pagination-precision correction turn):
+ * `created_at` columns are `timestamptz`, which Postgres stores and
+ * compares at microsecond precision. node-postgres's default type parser
+ * for `timestamptz` (OID 1184) returns a JS `Date` — which only holds
+ * MILLISECOND precision — regardless of what a `Row` interface's own
+ * `created_at: string` annotation claims (confirmed live: `typeof
+ * row.created_at === "object"`, `instanceof Date === true`). Building the
+ * cursor from that value and round-tripping it through
+ * `JSON.stringify`/`Date.prototype.toISOString()` silently discards the
+ * sub-millisecond digits Postgres actually stores. When two rows land
+ * within the same millisecond at a page boundary, the truncated cursor's
+ * own `(created_at, id) < (cursor.createdAt, cursor.id)` predicate can
+ * exclude a row that never appeared on any earlier page either —
+ * reproduced directly against real Postgres before this fix (a 3-row
+ * case with a deliberate millisecond collision silently dropped the
+ * middle row).
+ *
+ * Fix: every paginated list query additionally selects
+ * `created_at::text as created_at_cursor` — a second, cursor-only column,
+ * cast to `text` in SQL so Postgres's own default (identity) parser for
+ * `text` returns the exact stored value, at full precision, as a plain
+ * string, never constructing a lossy `Date`. `buildPage` builds the
+ * cursor from `created_at_cursor`, never from `created_at` (which keeps
+ * returning whatever it always has, for the unrelated `toItem` domain-
+ * object mapping — Contact.createdAt/Company.createdAt/etc.'s own public
+ * value and format are completely unchanged by this fix). The decoded
+ * cursor value is later substituted back into a `$N::timestamptz`
+ * parameter — Postgres re-parses its own full-precision text output
+ * losslessly, so the keyset comparison is exact.
+ *
+ * Backward compatible with already-issued cursors: the cursor's own
+ * shape (`{ createdAt: string, id: string }`, base64url(JSON(...)))
+ * and `decodeCursor`'s validation are unchanged — only which string
+ * value now populates `createdAt` differs (Postgres's own
+ * `timestamptz`-to-`text` output instead of `Date#toISOString()`), and
+ * both are non-empty ISO-parseable strings `decodeCursor`'s existing
+ * `Date.parse` sanity check accepts unchanged (verified for both
+ * formats). An old, already-issued cursor still decodes and still works
+ * correctly as a `::timestamptz` parameter — it simply carries the same
+ * millisecond-only precision it always did for that one historical
+ * resume point, not a new failure mode.
  */
 
 export interface Cursor {
@@ -92,8 +134,14 @@ export function resolveLimit(limit: number | undefined): number {
  * off the extra row (used only to detect whether another page exists,
  * never returned to the caller) and computes the next cursor from the
  * last item actually returned.
+ *
+ * `created_at_cursor` (see this module's own header comment) is required
+ * on `Row` specifically so this cursor is built from the full-precision
+ * text value, never from `created_at` itself (which every caller's own
+ * query also selects unmodified, for `toItem`'s domain-object mapping —
+ * untouched by this fix).
  */
-export function buildPage<Row extends { created_at: string; id: string }, T>(
+export function buildPage<Row extends { created_at: string; created_at_cursor: string; id: string }, T>(
   rows: Row[],
   limit: number,
   toItem: (row: Row) => T,
@@ -101,6 +149,6 @@ export function buildPage<Row extends { created_at: string; id: string }, T>(
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
   const last = pageRows[pageRows.length - 1];
-  const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.created_at, id: last.id }) : null;
+  const nextCursor = hasMore && last ? encodeCursor({ createdAt: last.created_at_cursor, id: last.id }) : null;
   return { items: pageRows.map(toItem), nextCursor };
 }

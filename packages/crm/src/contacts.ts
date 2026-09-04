@@ -87,6 +87,12 @@ interface ContactRow {
   updated_at: string;
 }
 
+/** listContacts-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — adds `created_at::text` at full Postgres precision,
+ * selected only for cursor construction. See pagination.ts's own header
+ * comment. Never read by toContact(). */
+type ContactListRow = ContactRow & { created_at_cursor: string };
+
 const CONTACT_COLUMNS = `id, organization_id, company_id, first_name, last_name, email, phone, job_title,
    linkedin_url, lifecycle_stage, owner_id, deleted_at, created_at, updated_at`;
 
@@ -184,6 +190,12 @@ export async function createContact(
       if (!row) {
         throw new Error("contacts insert returned no row — this should be unreachable.");
       }
+      // Milestone 4.1 Phase 2: emitted inside this same transaction so the
+      // outbox row is atomic with the insert itself. emit_contact_event is
+      // SECURITY DEFINER (public.events has zero grants to authenticated,
+      // M1.7) and re-derives organization_id from the row it just read —
+      // this call passes only the id.
+      await client.query("select public.emit_contact_event($1, 'contact.created')", [row.id]);
       return toContact(row);
     } catch (err) {
       if (isDuplicateContactEmailError(err)) {
@@ -301,8 +313,8 @@ export async function listContacts(
     }
     values.push(limit + 1);
 
-    const r = await client.query<ContactRow>(
-      `select ${CONTACT_COLUMNS} from public.contacts
+    const r = await client.query<ContactListRow>(
+      `select ${CONTACT_COLUMNS}, created_at::text as created_at_cursor from public.contacts
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,
@@ -406,6 +418,12 @@ export async function updateContact(
         values,
       );
       const row = r.rows[0];
+      if (row) {
+        // Milestone 4.1 Phase 2: only for a genuine UPDATE (this branch is
+        // never reached when sets.length === 0 above, which performs no
+        // write) — same atomic-with-the-mutation discipline as createContact.
+        await client.query("select public.emit_contact_event($1, 'contact.updated')", [row.id]);
+      }
       return row ? toContact(row) : null;
     } catch (err) {
       if (isDuplicateContactEmailError(err)) {
@@ -430,6 +448,13 @@ export async function softDeleteContact(ctx: RequestContext & { organizationId: 
       [id, ctx.organizationId],
     );
     const row = r.rows[0];
+    if (row) {
+      // Milestone 4.1 Phase 2: emitted inside this same transaction, after
+      // deleted_at is already set on the row this UPDATE...RETURNING just
+      // proved — emit_contact_event's own deleted_at is-not-null check for
+      // 'contact.deleted' matches this state exactly.
+      await client.query("select public.emit_contact_event($1, 'contact.deleted')", [row.id]);
+    }
     return row ? toContact(row) : null;
   });
 }

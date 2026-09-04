@@ -64,6 +64,10 @@ interface PipelineRow {
   updated_at: string;
 }
 
+/** listPipelines-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — see packages/crm/src/pagination.ts's own header comment. */
+type PipelineListRow = PipelineRow & { created_at_cursor: string };
+
 const PIPELINE_COLUMNS = `id, organization_id, name, is_default, deleted_at, created_at, updated_at`;
 
 function toPipeline(row: PipelineRow): Pipeline {
@@ -189,8 +193,8 @@ export async function listPipelines(
     }
     values.push(limit + 1);
 
-    const r = await client.query<PipelineRow>(
-      `select ${PIPELINE_COLUMNS} from public.pipelines
+    const r = await client.query<PipelineListRow>(
+      `select ${PIPELINE_COLUMNS}, created_at::text as created_at_cursor from public.pipelines
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,

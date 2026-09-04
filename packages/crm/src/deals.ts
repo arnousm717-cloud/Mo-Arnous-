@@ -118,6 +118,10 @@ interface DealRow {
   updated_at: string;
 }
 
+/** listDeals-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — see packages/crm/src/pagination.ts's own header comment. */
+type DealListRow = DealRow & { created_at_cursor: string };
+
 const DEAL_COLUMNS = `id, organization_id, company_id, primary_contact_id, pipeline_id, stage_id,
    amount, currency, probability, expected_close_date, status, owner_id, deleted_at, created_at, updated_at`;
 
@@ -255,6 +259,10 @@ export async function createDeal(
     if (!row) {
       throw new Error("deals insert returned no row — this should be unreachable.");
     }
+    // Milestone 4.1 Phase 2: emitted inside this same transaction so the
+    // outbox row is atomic with the insert itself — see emit_contact_event's
+    // own comment (contacts.ts) for the full SECURITY DEFINER rationale.
+    await client.query("select public.emit_deal_event($1, 'deal.created')", [row.id]);
     return toDeal(row);
   });
 }
@@ -264,6 +272,32 @@ export async function createDeal(
 export async function getDealById(ctx: RequestContext & { organizationId: string }, id: string): Promise<Deal | null> {
   return withTenantContext(ctx, async (client) => {
     const row = await getActiveDealRow(client, ctx.organizationId, id);
+    return row ? toDeal(row) : null;
+  });
+}
+
+/**
+ * Milestone 4.1 Phase 2. Mirrors getContactByIdIncludingDeleted/
+ * getCompanyByIdIncludingDeleted exactly (same tenant-scoped, read-only
+ * shape, no new migration) — does not filter out soft-deleted rows. Added
+ * for packages/brain's own tombstone-projection reconciliation read on a
+ * deal.deleted event (Brain must be able to read the deal's last-known
+ * content even after deleted_at is set, to project isDeleted: true rather
+ * than treat the entity as though it never existed). Never used for the
+ * active deal list/filter/relationship-validation paths — those must keep
+ * excluding soft-deleted deals unchanged.
+ */
+export async function getDealByIdIncludingDeleted(
+  ctx: RequestContext & { organizationId: string },
+  id: string,
+): Promise<Deal | null> {
+  return withTenantContext(ctx, async (client) => {
+    const r = await client.query<DealRow>(
+      `select ${DEAL_COLUMNS} from public.deals
+       where id = $1 and organization_id = $2`,
+      [id, ctx.organizationId],
+    );
+    const row = r.rows[0];
     return row ? toDeal(row) : null;
   });
 }
@@ -308,8 +342,8 @@ export async function listDeals(
     }
     values.push(limit + 1);
 
-    const r = await client.query<DealRow>(
-      `select ${DEAL_COLUMNS} from public.deals
+    const r = await client.query<DealListRow>(
+      `select ${DEAL_COLUMNS}, created_at::text as created_at_cursor from public.deals
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,
@@ -457,6 +491,11 @@ export async function updateDeal(
       values,
     );
     const row = r.rows[0];
+    if (row) {
+      // Milestone 4.1 Phase 2: only for a genuine UPDATE (the sets.length
+      // === 0 branch above performs no write and returns early).
+      await client.query("select public.emit_deal_event($1, 'deal.updated')", [row.id]);
+    }
     return row ? toDeal(row) : null;
   });
 }
@@ -473,6 +512,12 @@ export async function softDeleteDeal(ctx: RequestContext & { organizationId: str
       [id, ctx.organizationId],
     );
     const row = r.rows[0];
+    if (row) {
+      // Milestone 4.1 Phase 2: emitted after deleted_at is already set on
+      // the row this UPDATE...RETURNING just proved (see emit_contact_event's
+      // own comment in contacts.ts for the full rationale).
+      await client.query("select public.emit_deal_event($1, 'deal.deleted')", [row.id]);
+    }
     return row ? toDeal(row) : null;
   });
 }

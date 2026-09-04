@@ -78,6 +78,10 @@ interface CompanyRow {
   updated_at: string;
 }
 
+/** listCompanies-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — see packages/crm/src/pagination.ts's own header comment. */
+type CompanyListRow = CompanyRow & { created_at_cursor: string };
+
 const COMPANY_COLUMNS = `id, organization_id, name, domain, industry, employee_count, annual_revenue,
    linkedin_url, enrichment_status, owner_id, deleted_at, created_at, updated_at`;
 
@@ -148,6 +152,10 @@ export async function createCompany(
     if (!row) {
       throw new Error("companies insert returned no row — this should be unreachable.");
     }
+    // Milestone 4.1 Phase 2: emitted inside this same transaction so the
+    // outbox row is atomic with the insert itself — see emit_contact_event's
+    // own comment (contacts.ts) for the full SECURITY DEFINER rationale.
+    await client.query("select public.emit_company_event($1, 'company.created')", [row.id]);
     return toCompany(row);
   });
 }
@@ -213,8 +221,8 @@ export async function listCompanies(
     }
     values.push(limit + 1);
 
-    const r = await client.query<CompanyRow>(
-      `select ${COMPANY_COLUMNS} from public.companies
+    const r = await client.query<CompanyListRow>(
+      `select ${COMPANY_COLUMNS}, created_at::text as created_at_cursor from public.companies
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,
@@ -294,6 +302,11 @@ export async function updateCompany(
       values,
     );
     const row = r.rows[0];
+    if (row) {
+      // Milestone 4.1 Phase 2: only for a genuine UPDATE (the sets.length
+      // === 0 branch above performs no write and returns early).
+      await client.query("select public.emit_company_event($1, 'company.updated')", [row.id]);
+    }
     return row ? toCompany(row) : null;
   });
 }
@@ -310,6 +323,12 @@ export async function softDeleteCompany(ctx: RequestContext & { organizationId: 
       [id, ctx.organizationId],
     );
     const row = r.rows[0];
+    if (row) {
+      // Milestone 4.1 Phase 2: emitted after deleted_at is already set on
+      // the row this UPDATE...RETURNING just proved (see emit_contact_event's
+      // own comment in contacts.ts for the full rationale).
+      await client.query("select public.emit_company_event($1, 'company.deleted')", [row.id]);
+    }
     return row ? toCompany(row) : null;
   });
 }

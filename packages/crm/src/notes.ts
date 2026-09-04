@@ -70,6 +70,10 @@ interface NoteRow {
   updated_at: string;
 }
 
+/** listNotes-only row shape (M4.1 Phase 2 pagination-precision
+ * correction) — see packages/crm/src/pagination.ts's own header comment. */
+type NoteListRow = NoteRow & { created_at_cursor: string };
+
 const NOTE_COLUMNS = `id, organization_id, related_to_type, related_to_id, body, created_by,
    deleted_at, created_at, updated_at`;
 
@@ -191,8 +195,8 @@ export async function listNotes(
     }
     values.push(limit + 1);
 
-    const r = await client.query<NoteRow>(
-      `select ${NOTE_COLUMNS} from public.notes
+    const r = await client.query<NoteListRow>(
+      `select ${NOTE_COLUMNS}, created_at::text as created_at_cursor from public.notes
        where ${conditions.join(" and ")}
        order by created_at desc, id desc
        limit $${values.length}`,

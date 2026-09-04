@@ -1340,3 +1340,147 @@ and Phase 4 (AI Agents), remain IN PROGRESS — not complete.**
   Review.md` "Milestone 4.1 Phase 1"). Milestone 4.1 overall, and
   Phase 4 overall, remain in progress. Not yet committed or pushed as
   of this entry.
+
+## Milestone 4.1 Phase 2 — CRM Domain Events + Deterministic Projections
+
+**Status: Phase 2 of Milestone 4.1 IMPLEMENTATION ACCEPTED. Milestone
+4.1 as a whole, and Phase 4 (AI Agents), remain IN PROGRESS — not
+complete.**
+
+**Added**
+- **Three new `SECURITY DEFINER` emit functions** (migration
+  `20260906090000`): `emit_contact_event`/`emit_company_event`/
+  `emit_deal_event` — the sole write path into `public.events` for nine
+  new event types (`contact.created`/`.updated`/`.deleted`,
+  `company.*`, `deal.*`). Each validates its event type against a fixed
+  allowlist, derives `organization_id` from the target row, and
+  independently re-checks the row's `organization_id` against
+  `current_org()` before inserting, failing closed on any cross-tenant
+  mismatch — hardening added during the original implementation turn,
+  before any audit ran. Payloads are ID-minimized (`organization_id`
+  plus the entity id only), never a data snapshot.
+- **CRM event emission wired into 9 call sites** across
+  `packages/crm`'s `contacts.ts`/`companies.ts`/`deals.ts`
+  (`createX`/`updateX`/`softDeleteX`), atomic within the same
+  transaction as the domain-state write; a no-op update never emits.
+  `deals.ts` also gained `getDealByIdIncludingDeleted`, mirroring the
+  pre-existing `contacts`/`companies` variants.
+- **New `packages/brain` domain package** (dependent only on
+  `@ai-revenue-os/crm` and `@ai-revenue-os/database`): canonical
+  profile types (`CanonicalContactProfile`/`CanonicalCompanyProfile`/
+  `CanonicalDealProfile`, `profileVersion: 1`), a deterministic
+  projector with a fixed reconstructed key order, a repository
+  (`upsertEntityProfile`, `claimBrainProjectionRun`/
+  `completeBrainProjectionRun`, sync-state helpers), an ingestion layer
+  registering three dispatcher `EventConsumer`s
+  (`brain_projection_contact`/`_company`/`_deal`) that reuse
+  `workflow_runs`' claim-lease idempotency pattern, and a resumable
+  backfill (`bootstrapBrainForOrganization`, `PAGE_SIZE=50`) for
+  pre-existing CRM data.
+- **State-reconciliation projection model**: an event is a trigger to
+  re-read the entity's *current* row and deterministically recompute
+  its canonical profile — never a replay of a historical event
+  payload — with freshness determined by the source row's own
+  `updated_at`. A soft-deleted entity projects with `isDeleted: true`
+  and content preserved (via `getXByIdIncludingDeleted`); a subsequent
+  GDPR hard erasure removes the projected rows structurally via
+  Phase 1's own `ON DELETE CASCADE` FKs, proven that a stale
+  `.deleted` event replayed after hard erasure cannot resurrect
+  anything.
+- **New test coverage**: `packages/brain`'s own suite
+  (projector/repository/ingestion/backfill), a new
+  `packages/database/tests/brain-events-schema.test.ts` (SQL-level
+  security tests for the three emit functions), new Brain-consumer
+  registration tests in `apps/web/tests/dispatch-events-api.test.ts`,
+  and real integration-level microsecond-collision regression tests
+  added to `packages/crm/tests/{contacts,companies,deals}.test.ts`.
+
+**Changed**
+- **`packages/crm/src/pagination.ts` cursor precision, applied to all 8
+  consumers of the shared helper** (contacts, companies, deals,
+  activities, notes, pipelines, tags ×2): every paginated list query
+  now additionally selects `created_at::text as created_at_cursor`,
+  and `buildPage` builds the cursor from that full-precision text
+  value instead of the lossy `Date`-typed `created_at` — see Fixed,
+  below, for why. Cursor shape and `decodeCursor` validation are
+  unchanged; an already-issued cursor still decodes and works.
+- **`apps/web/tests/dispatch-events-api.test.ts`'s bounded drain-attempt
+  budget raised 20 → 150** (with four affected test timeouts raised to
+  90000ms) — once every CRM test fixture began emitting a real event,
+  ambient pending-event backlog under full-monorepo test load
+  inflated past the old budget; the new budget carries 10×+ headroom
+  measured against the actual observed backlog. A test-reliability
+  fix, not a change to production dispatch behavior.
+
+**Fixed**
+- **BLOCKER, found by the Final Implementation Acceptance Audit** —
+  `upsertEntityProfile`'s no-existing-row branch returned a bare stale
+  result on a lost `INSERT ... ON CONFLICT DO NOTHING`, permanently
+  letting stale data win if it physically lost the first-insert race.
+  Fixed with a bounded 2-attempt reconciliation loop, provably
+  sufficient for any N-way race since Postgres blocks a conflicting
+  `INSERT` until the winning transaction resolves. Proven via
+  differential testing (confirmed to fail against the reinstalled
+  original code, confirmed to pass against the fix); genuinely-
+  simultaneous `Promise.all` concurrency (verified reliable, 29/30
+  trials, via a raw two-connection probe) replaced an initial
+  timing-stagger technique that was itself proven unable to reliably
+  reproduce the race.
+- **BLOCKER, found during backfill-test authoring, escalated to
+  BLOCKER by the Final Re-Acceptance Audit** — node-postgres's default
+  `timestamptz` type parser returns a JS `Date` (millisecond precision
+  only), while Postgres stores/compares `created_at` at microsecond
+  precision; a keyset cursor built from the truncated value could
+  silently skip a row sharing a millisecond with the page-boundary
+  row, reproduced directly against real Postgres. Classified a BLOCKER
+  specifically because Phase 2's own `backfill.ts` depends on the
+  defective shared `pagination.ts` helper — not treated as
+  lower-severity merely for predating this phase. Fixed at the root
+  (see Changed, above) across all 8 shared-helper consumers, not only
+  the 3 Phase-2-relevant ones; verified via differential testing per
+  entity and a real, unstaggered collision fixture exactly at the
+  backfill's own `PAGE_SIZE=50` boundary, replacing an earlier
+  test-only stagger workaround the Final Re-Acceptance Audit had
+  correctly flagged as capable of masking the real bug.
+- **MEDIUM** — missing multi-page/resume backfill test coverage; fixed
+  with genuine >`PAGE_SIZE` fixtures and real resume-from-cursor tests
+  using only already-exported functions, no mocks.
+- **LOW** — a hard-erasure test used a fabricated nonexistent UUID
+  rather than a genuinely-profiled-then-erased contact; fixed with real
+  `execute_contact_erasure()` flows, including a soft-delete →
+  hard-erasure → stale-`.deleted`-replay sequence.
+
+**Known gaps, explicitly deferred (not oversights)**
+- Not built this phase, by design: embedding generation, semantic
+  search, the retrieval client/tools, the continuous-learning loop, any
+  AI/model-provider dependency, ingestion for any non-CRM source
+  (website visitors, tasks, knowledge documents), and Brain API
+  routes/Server Actions/UI/RBAC permissions/agent functionality.
+- At-least-once event delivery with idempotent processing remains the
+  real, disclosed contract — never exactly-once.
+
+**Closeout — final validation**
+- Full monorepo test suite: **3153/3153** passed. `pnpm lint`/
+  `typecheck`/`build`: clean across the monorepo. `pnpm audit
+  --audit-level=high`: completed against the live registry endpoint
+  with no known vulnerabilities. `pnpm-lock.yaml`'s only diff is the
+  new `packages/brain` workspace-importer block and `apps/web`'s link
+  to it — zero new external dependency versions. `git diff --check`
+  clean throughout.
+- **Two independent NO-GO rounds before final acceptance**: a Final
+  Implementation Acceptance Audit (one BLOCKER — the first-insert
+  concurrency race — plus 2 MEDIUM/1 LOW, all reproduced live —
+  **NO-GO**), a correction round, a Final Re-Acceptance Audit that
+  independently reproduced and escalated the pagination defect to
+  BLOCKER on Phase-2-dependency grounds (**NO-GO**, a second time), a
+  dedicated pagination-only correction round, and a final Final
+  Implementation Re-Acceptance Audit — explicitly instructed not to
+  trust any prior round's own report — that independently re-verified
+  every fix via fresh live security probes, fresh multi-run test
+  execution, and a new, harder independent pagination reproduction
+  (**GO**, zero BLOCKER/HIGH remaining). This history is recorded in
+  full, not condensed away.
+- **Milestone 4.1 Phase 2 status: PASS** (`docs/13-Technical-Design-
+  Review.md` "Milestone 4.1 Phase 2"). Milestone 4.1 overall, and
+  Phase 4 overall, remain in progress. Not yet committed or pushed as
+  of this entry.

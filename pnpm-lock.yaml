@@ -32,6 +32,9 @@ importers:
       '@ai-revenue-os/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@ai-revenue-os/brain':
+        specifier: workspace:*
+        version: link:../../packages/brain
       '@ai-revenue-os/compliance':
         specifier: workspace:*
         version: link:../../packages/compliance
@@ -121,6 +124,34 @@ importers:
       next:
         specifier: ^15.5.23
         version: 15.5.23(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      pg:
+        specifier: ^8.13.0
+        version: 8.22.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(terser@5.49.2)
+
+  packages/brain:
+    dependencies:
+      '@ai-revenue-os/crm':
+        specifier: workspace:*
+        version: link:../crm
+      '@ai-revenue-os/database':
+        specifier: workspace:*
+        version: link:../database
+    devDependencies:
+      '@ai-revenue-os/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.20.4
       pg:
         specifier: ^8.13.0
         version: 8.22.0

@@ -217,6 +217,52 @@ describe("listCompanies", () => {
     expect(new Set(allIds).size).toBe(5);
   });
 
+  /**
+   * M4.1 Phase 2 pagination-precision correction (Final Re-Acceptance
+   * Audit BLOCKER) — see the identical, more fully-commented test in
+   * contacts.test.ts for the full rationale. RowC (newest, page 1's sole
+   * item at limit=1, and therefore the cursor row) collides at
+   * millisecond precision with RowB, which page 2 must still correctly
+   * recover.
+   */
+  it("a microsecond-only collision between the page-1 cursor row and page 2's own first row does not skip a row", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+
+    const ids = await seedAsAdmin(async (client) => {
+      const rowA = await client.query<{ id: string }>(
+        `insert into public.companies (organization_id, name, created_at)
+         values ($1, 'RowA', '2026-01-01 12:00:00.100000+00') returning id`,
+        [organizationId],
+      );
+      const rowB = await client.query<{ id: string }>(
+        `insert into public.companies (organization_id, name, created_at)
+         values ($1, 'RowB', '2026-01-01 12:00:00.200111+00') returning id`,
+        [organizationId],
+      );
+      const rowC = await client.query<{ id: string }>(
+        `insert into public.companies (organization_id, name, created_at)
+         values ($1, 'RowC', '2026-01-01 12:00:00.200999+00') returning id`,
+        [organizationId],
+      );
+      return { a: rowA.rows[0]!.id, b: rowB.rows[0]!.id, c: rowC.rows[0]!.id };
+    });
+
+    const page1 = await listCompanies(ctx, { limit: 1 });
+    expect(page1.items).toHaveLength(1);
+    expect(page1.items[0]!.id).toBe(ids.c);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2 = await listCompanies(ctx, { limit: 2, cursor: page1.nextCursor! });
+    const page2Ids = page2.items.map((c) => c.id);
+    expect(page2Ids).toEqual([ids.b, ids.a]);
+    expect(page2.nextCursor).toBeNull();
+
+    const allIds = [...page1.items, ...page2.items].map((c) => c.id);
+    expect(new Set(allIds)).toEqual(new Set([ids.a, ids.b, ids.c]));
+    expect(allIds).toHaveLength(3);
+  });
+
   it("filters by ownerId", async () => {
     const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
     const ctx = { userId, organizationId, roleKey };
@@ -378,5 +424,48 @@ describe("softDeleteCompany", () => {
       return r.rows[0];
     });
     expect(stillThere.deleted_at).toBeNull();
+  });
+});
+
+describe("Milestone 4.1 Phase 2: domain-event emission", () => {
+  async function eventCount(organizationId: string, eventType: string, companyId: string): Promise<number> {
+    return seedAsAdmin(async (client) => {
+      const r = await client.query<{ count: string }>(
+        "select count(*)::text as count from public.events where organization_id = $1 and event_type = $2 and payload->>'company_id' = $3",
+        [organizationId, eventType, companyId],
+      );
+      return Number(r.rows[0]!.count);
+    });
+  }
+
+  it("createCompany emits exactly one company.created event", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const company = await createCompany({ userId, organizationId, roleKey }, { name: "Acme Inc" });
+    expect(await eventCount(organizationId, "company.created", company.id)).toBe(1);
+  });
+
+  it("updateCompany emits exactly one company.updated event on a genuine field change", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const company = await createCompany(ctx, { name: "Acme Inc" });
+    await updateCompany(ctx, company.id, { name: "Acme Corp" });
+    expect(await eventCount(organizationId, "company.updated", company.id)).toBe(1);
+  });
+
+  it("updateCompany with no field changes does not emit a second event", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const company = await createCompany(ctx, { name: "Acme Inc" });
+    await updateCompany(ctx, company.id, {});
+    expect(await eventCount(organizationId, "company.updated", company.id)).toBe(0);
+  });
+
+  it("softDeleteCompany emits exactly one company.deleted event, never company.updated", async () => {
+    const { organizationId, userId, roleKey } = await createOrgWithActiveMember();
+    const ctx = { userId, organizationId, roleKey };
+    const company = await createCompany(ctx, { name: "Acme Inc" });
+    await softDeleteCompany(ctx, company.id);
+    expect(await eventCount(organizationId, "company.deleted", company.id)).toBe(1);
+    expect(await eventCount(organizationId, "company.updated", company.id)).toBe(0);
   });
 });

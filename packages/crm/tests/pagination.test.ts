@@ -74,14 +74,15 @@ describe("resolveLimit", () => {
 describe("buildPage", () => {
   interface Row {
     created_at: string;
+    created_at_cursor: string;
     id: string;
   }
 
   function makeRows(n: number): Row[] {
-    return Array.from({ length: n }, (_, i) => ({
-      created_at: new Date(2026, 0, 1, 0, 0, i).toISOString(),
-      id: randomUUID(),
-    }));
+    return Array.from({ length: n }, (_, i) => {
+      const createdAt = new Date(2026, 0, 1, 0, 0, i).toISOString();
+      return { created_at: createdAt, created_at_cursor: createdAt, id: randomUUID() };
+    });
   }
 
   it("returns nextCursor: null when there is no extra row (last page)", () => {
@@ -98,12 +99,48 @@ describe("buildPage", () => {
     expect(page.nextCursor).not.toBeNull();
     const decoded = decodeCursor(page.nextCursor!);
     expect(decoded.id).toBe(rows[2]!.id);
-    expect(decoded.createdAt).toBe(rows[2]!.created_at);
+    expect(decoded.createdAt).toBe(rows[2]!.created_at_cursor);
   });
 
   it("handles an empty result set", () => {
     const page = buildPage([], 25, (r: Row) => r.id);
     expect(page.items).toEqual([]);
     expect(page.nextCursor).toBeNull();
+  });
+
+  /**
+   * M4.1 Phase 2 pagination-precision correction — direct helper-level
+   * proof that the cursor is built from `created_at_cursor`, never from
+   * `created_at`. Deliberately makes the two fields DIFFER (as they would
+   * in production whenever `created_at` has been through node-postgres's
+   * lossy `Date` parsing but `created_at_cursor` carries the full-
+   * precision `::text` cast) — if buildPage ever regressed to reading
+   * `created_at` again, this test would immediately fail.
+   */
+  it("builds the cursor from created_at_cursor, not from created_at, even when they differ", () => {
+    // limit=1, two rows fetched (the standard limit+1 lookahead): row[0] is
+    // the one actual page item (and therefore the one buildPage builds the
+    // cursor from); row[1] is only the lookahead row used to detect
+    // hasMore, never itself a cursor source.
+    const pageItemId = randomUUID();
+    const rows: Row[] = [
+      {
+        // Deliberately mismatched: created_at (lossy, as node-postgres's
+        // default Date parser would produce) vs created_at_cursor (full
+        // precision, as the `::text` cast produces) — a realistic
+        // production pair for a row whose real timestamp carries
+        // sub-millisecond digits.
+        created_at: "2026-01-01T00:00:00.200Z",
+        created_at_cursor: "2026-01-01 00:00:00.200999+00",
+        id: pageItemId,
+      },
+      { created_at: "2026-01-01T00:00:00.000Z", created_at_cursor: "2026-01-01 00:00:00.000000+00", id: randomUUID() },
+    ];
+    const page = buildPage(rows, 1, (r) => r.id);
+    expect(page.nextCursor).not.toBeNull();
+    const decoded = decodeCursor(page.nextCursor!);
+    expect(decoded.id).toBe(pageItemId);
+    expect(decoded.createdAt).toBe("2026-01-01 00:00:00.200999+00");
+    expect(decoded.createdAt).not.toBe("2026-01-01T00:00:00.200Z");
   });
 });

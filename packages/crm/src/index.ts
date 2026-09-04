@@ -50,6 +50,7 @@ export {
 export {
   createDeal,
   getDealById,
+  getDealByIdIncludingDeleted,
   listDeals,
   updateDeal,
   softDeleteDeal,

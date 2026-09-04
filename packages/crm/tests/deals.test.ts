@@ -302,6 +302,51 @@ describe("listDeals", () => {
     expect(secondPage.items).toHaveLength(1);
   });
 
+  /**
+   * M4.1 Phase 2 pagination-precision correction (Final Re-Acceptance
+   * Audit BLOCKER) — see the identical, more fully-commented test in
+   * contacts.test.ts for the full rationale. RowC (newest, page 1's sole
+   * item at limit=1, and therefore the cursor row) collides at
+   * millisecond precision with RowB, which page 2 must still correctly
+   * recover.
+   */
+  it("a microsecond-only collision between the page-1 cursor row and page 2's own first row does not skip a row", async () => {
+    const { ctx, pipeline, stage } = await makeCtxWithStage();
+
+    const ids = await seedAsAdmin(async (client) => {
+      const rowA = await client.query<{ id: string }>(
+        `insert into public.deals (organization_id, pipeline_id, stage_id, created_at)
+         values ($1, $2, $3, '2026-01-01 12:00:00.100000+00') returning id`,
+        [ctx.organizationId, pipeline.id, stage.id],
+      );
+      const rowB = await client.query<{ id: string }>(
+        `insert into public.deals (organization_id, pipeline_id, stage_id, created_at)
+         values ($1, $2, $3, '2026-01-01 12:00:00.200111+00') returning id`,
+        [ctx.organizationId, pipeline.id, stage.id],
+      );
+      const rowC = await client.query<{ id: string }>(
+        `insert into public.deals (organization_id, pipeline_id, stage_id, created_at)
+         values ($1, $2, $3, '2026-01-01 12:00:00.200999+00') returning id`,
+        [ctx.organizationId, pipeline.id, stage.id],
+      );
+      return { a: rowA.rows[0]!.id, b: rowB.rows[0]!.id, c: rowC.rows[0]!.id };
+    });
+
+    const page1 = await listDeals(ctx, { limit: 1 });
+    expect(page1.items).toHaveLength(1);
+    expect(page1.items[0]!.id).toBe(ids.c);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2 = await listDeals(ctx, { limit: 2, cursor: page1.nextCursor! });
+    const page2Ids = page2.items.map((d) => d.id);
+    expect(page2Ids).toEqual([ids.b, ids.a]);
+    expect(page2.nextCursor).toBeNull();
+
+    const allIds = [...page1.items, ...page2.items].map((d) => d.id);
+    expect(new Set(allIds)).toEqual(new Set([ids.a, ids.b, ids.c]));
+    expect(allIds).toHaveLength(3);
+  });
+
   it("filters by pipelineId, stageId, ownerId, companyId, and status", async () => {
     const { ctx, pipeline, stage } = await makeCtxWithStage();
     const otherPipeline = await createPipeline(ctx, { name: "Other" });
@@ -588,5 +633,45 @@ describe("softDeleteDeal", () => {
     const deal = await createDeal(ctx, { pipelineId: pipeline.id, stageId: stage.id });
     await softDeleteDeal(ctx, deal.id);
     expect(await softDeleteDeal(ctx, deal.id)).toBeNull();
+  });
+});
+
+describe("Milestone 4.1 Phase 2: domain-event emission", () => {
+  async function eventCount(organizationId: string, eventType: string, dealId: string): Promise<number> {
+    return seedAsAdmin(async (client) => {
+      const r = await client.query<{ count: string }>(
+        "select count(*)::text as count from public.events where organization_id = $1 and event_type = $2 and payload->>'deal_id' = $3",
+        [organizationId, eventType, dealId],
+      );
+      return Number(r.rows[0]!.count);
+    });
+  }
+
+  it("createDeal emits exactly one deal.created event", async () => {
+    const { ctx, pipeline, stage } = await makeCtxWithStage();
+    const deal = await createDeal(ctx, { pipelineId: pipeline.id, stageId: stage.id });
+    expect(await eventCount(ctx.organizationId, "deal.created", deal.id)).toBe(1);
+  });
+
+  it("updateDeal emits exactly one deal.updated event on a genuine field change", async () => {
+    const { ctx, pipeline, stage } = await makeCtxWithStage();
+    const deal = await createDeal(ctx, { pipelineId: pipeline.id, stageId: stage.id });
+    await updateDeal(ctx, deal.id, { amount: 500 });
+    expect(await eventCount(ctx.organizationId, "deal.updated", deal.id)).toBe(1);
+  });
+
+  it("updateDeal with no field changes does not emit a second event", async () => {
+    const { ctx, pipeline, stage } = await makeCtxWithStage();
+    const deal = await createDeal(ctx, { pipelineId: pipeline.id, stageId: stage.id });
+    await updateDeal(ctx, deal.id, {});
+    expect(await eventCount(ctx.organizationId, "deal.updated", deal.id)).toBe(0);
+  });
+
+  it("softDeleteDeal emits exactly one deal.deleted event, never deal.updated", async () => {
+    const { ctx, pipeline, stage } = await makeCtxWithStage();
+    const deal = await createDeal(ctx, { pipelineId: pipeline.id, stageId: stage.id });
+    await softDeleteDeal(ctx, deal.id);
+    expect(await eventCount(ctx.organizationId, "deal.deleted", deal.id)).toBe(1);
+    expect(await eventCount(ctx.organizationId, "deal.updated", deal.id)).toBe(0);
   });
 });
