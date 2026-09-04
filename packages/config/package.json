@@ -9,7 +9,7 @@
     "./typescript/nextjs.json": "./typescript/nextjs.json"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.4.0",
     "@typescript-eslint/eslint-plugin": "^8.66.0",
     "@typescript-eslint/parser": "^8.66.0",
     "eslint-config-next": "^15.5.23",

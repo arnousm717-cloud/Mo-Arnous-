@@ -28,7 +28,7 @@
     "@ai-revenue-os/config": "workspace:*",
     "@sentry/core": "^10.70.0",
     "@supabase/supabase-js": "^2.112.1",
-    "@types/node": "^22.10.0",
+    "@types/node": "^26.4.0",
     "@types/pg": "^8.11.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
