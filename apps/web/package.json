@@ -21,7 +21,7 @@
     "next": "^15.5.23",
     "pg": "^8.13.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@ai-revenue-os/config": "workspace:*",
@@ -30,7 +30,7 @@
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.0",
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
+    "@types/react-dom": "^19.2.5",
     "typescript": "^5.7.0",
     "vitest": "^3.2.7"
   }
