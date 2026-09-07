@@ -227,7 +227,7 @@ describe("brain_*: effective grants match the approved design", () => {
     expect(rows).toEqual(["SELECT"]);
   });
 
-  it("authenticated has exactly SELECT/INSERT (no UPDATE, no DELETE) on brain_entity_profile_history/brain_embeddings/brain_embedding_entity_refs", async () => {
+  it("authenticated has exactly SELECT/INSERT (no UPDATE, no DELETE) on brain_entity_profile_history/brain_embedding_entity_refs, and now also UPDATE on brain_embeddings (Milestone 4.1 Phase 3 grant extension)", async () => {
     const rows = await seedAsAdmin(async (client) => {
       const r = await client.query<{ table_name: string; privilege_type: string }>(
         `select table_name, privilege_type from information_schema.role_table_grants
@@ -243,7 +243,13 @@ describe("brain_*: effective grants match the approved design", () => {
       byTable.set(row.table_name, [...(byTable.get(row.table_name) ?? []), row.privilege_type]);
     }
     expect(byTable.get("brain_entity_profile_history")).toEqual(["INSERT", "SELECT"]);
-    expect(byTable.get("brain_embeddings")).toEqual(["INSERT", "SELECT"]);
+    // Milestone 4.1 Phase 3 (20260907090000): UPDATE added deliberately —
+    // upsertEntityEmbedding needs to update an existing embedding row in
+    // place (the same "one current row, update in place" pattern
+    // brain_entity_profiles itself already uses), still no DELETE grant
+    // anywhere — rows are removed only via ON DELETE CASCADE or
+    // execute_contact_erasure()'s targeted-capture delete, unchanged.
+    expect(byTable.get("brain_embeddings")).toEqual(["INSERT", "SELECT", "UPDATE"]);
     expect(byTable.get("brain_embedding_entity_refs")).toEqual(["INSERT", "SELECT"]);
   });
 

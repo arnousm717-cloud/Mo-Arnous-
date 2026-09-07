@@ -432,3 +432,110 @@ describe("GET /api/internal/dispatch-events: Milestone 4.1 Phase 2 Brain project
     expect((row as { profile: { name: string } }).profile.name).toBe("DispatchCo");
   }, 90000);
 });
+
+describe("GET /api/internal/dispatch-events: Milestone 4.1 Phase 3 embedding-trigger consumers", () => {
+  const ORIGINAL_EMBEDDING_WEBHOOK_URL = process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL;
+  let mockEmbeddingServer: Server | undefined;
+  let mockEmbeddingPort: number;
+  let receivedEmbeddingTriggers: Array<{ eventId: string; organizationId: string; entityType: string; entityId: string }>;
+
+  beforeEach(async () => {
+    delete process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL;
+    receivedEmbeddingTriggers = [];
+    await new Promise<void>((resolve) => {
+      mockEmbeddingServer = createServer((req, res) => {
+        let raw = "";
+        req.on("data", (chunk) => (raw += chunk));
+        req.on("end", () => {
+          receivedEmbeddingTriggers.push(JSON.parse(raw));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true }));
+        });
+      });
+      mockEmbeddingServer!.listen(0, "127.0.0.1", () => {
+        const address = mockEmbeddingServer!.address();
+        mockEmbeddingPort = typeof address === "object" && address ? address.port : 0;
+        resolve();
+      });
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => mockEmbeddingServer!.close(() => resolve()));
+    if (ORIGINAL_EMBEDDING_WEBHOOK_URL === undefined) delete process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL;
+    else process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL = ORIGINAL_EMBEDDING_WEBHOOK_URL;
+  });
+
+  async function dispatchUntilOwnEmbeddingTrigger(organizationId: string, maxAttempts = MAX_DISPATCH_DRAIN_ATTEMPTS): Promise<void> {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (receivedEmbeddingTriggers.some((t) => t.organizationId === organizationId)) return;
+      const response = await handleDispatchEvents(dispatchRequest(`Bearer ${CRON_SECRET_VALUE}`));
+      expect(response.status).toBe(200);
+    }
+  }
+
+  it("a real contact.created event triggers the embedding webhook with an ID-minimized payload — no profile/CRM text", async () => {
+    process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL = `http://127.0.0.1:${mockEmbeddingPort}/webhook`;
+    const actor = await createOrgWithRole("org_admin", "brain-embed-dispatch");
+    const contact = await createContact(
+      { userId: actor.userId, organizationId: actor.organizationId, roleKey: actor.roleKey },
+      { firstName: "EmbedTriggerTest", email: `embed-trigger-${randomUUID()}@example.test` },
+    );
+
+    await dispatchUntilOwnEmbeddingTrigger(actor.organizationId);
+
+    const own = receivedEmbeddingTriggers.find((t) => t.organizationId === actor.organizationId);
+    expect(own).toBeDefined();
+    expect(own!.entityType).toBe("contact");
+    expect(own!.entityId).toBe(contact.id);
+    expect(own!.eventId).toBeTruthy();
+    // ID-minimized: exactly these four keys, never a firstName/email/any CRM field.
+    expect(Object.keys(own!).sort()).toEqual(["entityId", "entityType", "eventId", "organizationId"]);
+    const serialized = JSON.stringify(own);
+    expect(serialized).not.toContain("EmbedTriggerTest");
+  }, 90000);
+
+  it("an unconfigured N8N_BRAIN_EMBEDDING_WEBHOOK_URL fails this one delivery cleanly, without crashing the dispatch route or any other consumer", async () => {
+    // Deliberately unset (beforeEach) — contactProjectionConsumer must
+    // still succeed independently even though the embedding-trigger
+    // consumer for the same event fails.
+    const actor = await createOrgWithRole("org_admin", "brain-embed-dispatch-unconfigured");
+    const contact = await createContact(
+      { userId: actor.userId, organizationId: actor.organizationId, roleKey: actor.roleKey },
+      { firstName: "Unconfigured" },
+    );
+
+    let profileExists = false;
+    for (let attempt = 0; attempt < MAX_DISPATCH_DRAIN_ATTEMPTS && !profileExists; attempt++) {
+      const response = await handleDispatchEvents(dispatchRequest(`Bearer ${CRON_SECRET_VALUE}`));
+      expect(response.status).toBe(200);
+      const row = await getPool().query("select 1 from public.brain_entity_profiles where organization_id = $1 and contact_id = $2", [
+        actor.organizationId,
+        contact.id,
+      ]);
+      profileExists = row.rows.length > 0;
+    }
+    expect(profileExists).toBe(true);
+    expect(receivedEmbeddingTriggers.find((t) => t.organizationId === actor.organizationId)).toBeUndefined();
+  }, 90000);
+
+  it("a failed webhook attempt preserves retry semantics: fixing the URL after an initial failure still delivers the trigger on a later tick", async () => {
+    // Points at a real port with nothing listening — the fetch itself fails.
+    process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL = "http://127.0.0.1:1/webhook";
+    const actor = await createOrgWithRole("org_admin", "brain-embed-dispatch-retry");
+    await createContact({ userId: actor.userId, organizationId: actor.organizationId, roleKey: actor.roleKey }, { firstName: "RetryMe" });
+
+    // A few ticks against the broken URL — never delivered.
+    for (let i = 0; i < 3; i++) {
+      const response = await handleDispatchEvents(dispatchRequest(`Bearer ${CRON_SECRET_VALUE}`));
+      expect(response.status).toBe(200);
+    }
+    expect(receivedEmbeddingTriggers.find((t) => t.organizationId === actor.organizationId)).toBeUndefined();
+
+    // Fix the URL — the SAME event, still pending, is retried and delivered.
+    process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL = `http://127.0.0.1:${mockEmbeddingPort}/webhook`;
+    await dispatchUntilOwnEmbeddingTrigger(actor.organizationId);
+
+    expect(receivedEmbeddingTriggers.find((t) => t.organizationId === actor.organizationId)).toBeDefined();
+  }, 90000);
+});

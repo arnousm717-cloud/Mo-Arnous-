@@ -1,5 +1,5 @@
 import { listContacts, listCompanies, listDeals } from "@ai-revenue-os/crm";
-import type { RequestContext } from "@ai-revenue-os/database";
+import { withTenantContext, type RequestContext } from "@ai-revenue-os/database";
 import { projectContactProfile, projectCompanyProfile, projectDealProfile } from "./projector";
 import { upsertEntityProfile, getSyncState, upsertSyncState } from "./repository";
 import type { EntityType } from "./types";
@@ -128,4 +128,114 @@ async function backfillDeals(ctx: RequestContext & { organizationId: string }): 
 /** Runs all three entity-type backfills for one organization, sequentially, tenant-scoped throughout (every read/write goes through ctx.organizationId under withTenantContext/RLS). */
 export async function bootstrapBrainForOrganization(ctx: RequestContext & { organizationId: string }): Promise<BackfillReport[]> {
   return [await backfillContacts(ctx), await backfillCompanies(ctx), await backfillDeals(ctx)];
+}
+
+/**
+ * Milestone 4.1 Phase 3 — embedding-trigger backfill (Detailed Design
+ * §O). Identifies which `brain_entity_profiles` rows need a (re-)embed:
+ * no current `brain_embeddings` row at all, or the existing one's own
+ * `source_version_at` is older than the profile's current `computed_at`.
+ *
+ * Does NOT generate a vector itself, and makes no external call — this
+ * repository never calls an embedding provider (see `embeddings.ts`'s own
+ * header comment). This function's only job is identification: its output
+ * feeds the exact same trigger/write-back architecture the live dispatcher
+ * path already uses (the `brain_embedding_trigger_*` `workflow_runs`-keyed
+ * webhook consumers registered in `apps/web`) — wiring that a future,
+ * app-layer caller performs, not this pure domain function.
+ *
+ * Pagination is keyset by `brain_entity_profiles.id` alone — a UUID, never
+ * a timestamp — deliberately, to avoid reintroducing ANY variant of the
+ * node-postgres millisecond-precision `timestamptz`-cursor class of bug
+ * `packages/crm/src/pagination.ts` had to fix for Phase 2 (see that
+ * module's own header comment for the full history): a UUID comparison
+ * has no floating-precision loss to begin with, so there is no analogous
+ * defect possible here by construction, not merely by care.
+ */
+const EMBEDDING_BACKFILL_PAGE_SIZE = 50;
+
+const EMBEDDING_BACKFILL_SYNC_KEY: Record<EntityType, string> = {
+  contact: "brain_embedding_backfill_contacts",
+  company: "brain_embedding_backfill_companies",
+  deal: "brain_embedding_backfill_deals",
+};
+
+export interface EmbeddingBackfillRef {
+  entityType: EntityType;
+  entityId: string;
+  profileId: string;
+  computedAt: string;
+}
+
+export interface EmbeddingBackfillReport {
+  entityType: EntityType;
+  scanned: number;
+  needingEmbedding: EmbeddingBackfillRef[];
+  cursor: string | null;
+}
+
+async function findProfilesNeedingEmbeddingForEntity(
+  ctx: RequestContext & { organizationId: string },
+  entityType: EntityType,
+): Promise<EmbeddingBackfillReport> {
+  const column = entityType === "contact" ? "contact_id" : entityType === "company" ? "company_id" : "deal_id";
+  const syncKey = EMBEDDING_BACKFILL_SYNC_KEY[entityType];
+  const report: EmbeddingBackfillReport = { entityType, scanned: 0, needingEmbedding: [], cursor: null };
+  let cursor = (await getSyncState(ctx, syncKey))?.nextCursor ?? null;
+
+  for (;;) {
+    // One query per page, over EVERY profile in id order (not
+    // pre-filtered) — needs_embedding is a computed column, not a WHERE
+    // clause, so the cursor always advances over the full page regardless
+    // of how many rows in it actually need embedding. A WHERE-filtered
+    // query would leave the cursor stuck forever on a page where every
+    // profile already has a current embedding.
+    const rows = await withTenantContext(ctx, async (client) => {
+      const r = await client.query<{ id: string; entity_id: string; computed_at: string; needs_embedding: boolean }>(
+        `select ep.id, ep.${column} as entity_id, ep.computed_at,
+                (be.id is null or be.source_version_at < ep.computed_at) as needs_embedding
+         from public.brain_entity_profiles ep
+         left join public.brain_embeddings be
+           on be.organization_id = ep.organization_id and be.entity_profile_id = ep.id
+         where ep.organization_id = $1
+           and ep.entity_type = $2
+           and ($3::uuid is null or ep.id > $3::uuid)
+         order by ep.id asc
+         limit $4`,
+        [ctx.organizationId, entityType, cursor, EMBEDDING_BACKFILL_PAGE_SIZE],
+      );
+      return r.rows;
+    });
+
+    report.scanned += rows.length;
+    for (const row of rows) {
+      if (row.needs_embedding) {
+        report.needingEmbedding.push({ entityType, entityId: row.entity_id, profileId: row.id, computedAt: row.computed_at });
+      }
+    }
+
+    const lastId = rows[rows.length - 1]?.id ?? null;
+    cursor = lastId ?? cursor;
+    await upsertSyncState(ctx, syncKey, { nextCursor: cursor });
+    report.cursor = cursor;
+
+    if (rows.length < EMBEDDING_BACKFILL_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return report;
+}
+
+/** Runs the embedding-trigger identification pass for all three entity
+ * types, sequentially, tenant-scoped throughout — the embedding-backfill
+ * counterpart to `bootstrapBrainForOrganization` above. */
+export async function findProfilesNeedingEmbedding(
+  ctx: RequestContext & { organizationId: string },
+): Promise<EmbeddingBackfillReport[]> {
+  return [
+    await findProfilesNeedingEmbeddingForEntity(ctx, "contact"),
+    await findProfilesNeedingEmbeddingForEntity(ctx, "company"),
+    await findProfilesNeedingEmbeddingForEntity(ctx, "deal"),
+  ];
 }

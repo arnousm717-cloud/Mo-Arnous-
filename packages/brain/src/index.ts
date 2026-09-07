@@ -25,5 +25,13 @@ export {
   EVENT_TYPES_BY_ENTITY,
   type ReconcileOutcome,
 } from "./ingestion";
-export { bootstrapBrainForOrganization, type BackfillReport } from "./backfill";
+export { bootstrapBrainForOrganization, findProfilesNeedingEmbedding, type BackfillReport, type EmbeddingBackfillReport } from "./backfill";
 export { BrainError, MalformedEventPayloadError } from "./errors";
+export {
+  upsertEntityEmbedding,
+  computeContentHash,
+  isValidEmbeddingVector,
+  EMBEDDING_DIMENSION,
+  type EmbeddingWriteBackInput,
+  type EmbeddingWriteBackResult,
+} from "./embeddings";

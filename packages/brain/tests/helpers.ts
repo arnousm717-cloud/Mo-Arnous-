@@ -106,3 +106,47 @@ export async function countBrainHistoryRows(entityProfileId: string): Promise<nu
     return Number(r.rows[0]!.count);
   });
 }
+
+/** Milestone 4.1 Phase 3 fixtures. */
+
+/** Inserts a brain_entity_profiles row directly (bypassing upsertEntityProfile) — controlled fixture setup for embeddings.test.ts, which tests the embedding layer against a KNOWN profile state, not the projection layer. */
+export async function seedProfile(
+  organizationId: string,
+  entityColumn: "contact_id" | "company_id" | "deal_id",
+  entityId: string,
+  computedAt = new Date().toISOString(),
+): Promise<{ id: string; computedAt: string }> {
+  const entityType = entityColumn === "contact_id" ? "contact" : entityColumn === "company_id" ? "company" : "deal";
+  return seedAsAdmin(async (client) => {
+    const r = await client.query<{ id: string; computed_at: string }>(
+      `insert into public.brain_entity_profiles (organization_id, entity_type, ${entityColumn}, profile, computed_at)
+       values ($1, $2, $3, '{}'::jsonb, $4) returning id, computed_at`,
+      [organizationId, entityType, entityId, computedAt],
+    );
+    return { id: r.rows[0]!.id, computedAt: r.rows[0]!.computed_at };
+  });
+}
+
+export async function getEmbeddingRow(organizationId: string, entityProfileId: string) {
+  return seedAsAdmin(async (client) => {
+    const r = await client.query(
+      "select id, chunk_text, content_hash, source_version_at from public.brain_embeddings where organization_id = $1 and entity_profile_id = $2",
+      [organizationId, entityProfileId],
+    );
+    return r.rows[0] ?? null;
+  });
+}
+
+export async function countEmbeddingEntityRefs(embeddingId: string): Promise<number> {
+  return seedAsAdmin(async (client) => {
+    const r = await client.query<{ count: string }>(
+      "select count(*)::text as count from public.brain_embedding_entity_refs where embedding_id = $1",
+      [embeddingId],
+    );
+    return Number(r.rows[0]!.count);
+  });
+}
+
+export function fakeVector(seed = 0): number[] {
+  return Array.from({ length: 1536 }, (_, i) => Math.sin(seed + i) * 0.01);
+}

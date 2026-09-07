@@ -7,7 +7,15 @@ import {
   recalculateContactScoreForEvent,
   recoverPendingPostEnrichmentScoring,
 } from "@ai-revenue-os/intelligence";
-import { contactProjectionConsumer, companyProjectionConsumer, dealProjectionConsumer } from "@ai-revenue-os/brain";
+import {
+  contactProjectionConsumer,
+  companyProjectionConsumer,
+  dealProjectionConsumer,
+  claimBrainProjectionRun,
+  completeBrainProjectionRun,
+  EVENT_TYPES_BY_ENTITY,
+  type EntityType,
+} from "@ai-revenue-os/brain";
 import { apiError } from "../../v1/_shared/api-error";
 
 /**
@@ -168,6 +176,124 @@ const leadScoringConsumer: EventConsumer = {
   },
 };
 
+const PAYLOAD_ID_KEY: Record<EntityType, "contact_id" | "company_id" | "deal_id"> = {
+  contact: "contact_id",
+  company: "company_id",
+  deal: "deal_id",
+};
+
+/**
+ * Milestone 4.1 Phase 3 — notifies the (future, not-yet-built) n8n Brain
+ * Indexing workflow that a contact/company/deal profile may need a
+ * (re-)embedding. Registered on the same nine contact/company/deal events
+ * `brain_projection_*` already drains — the "one dispatcher, many
+ * independent consumers" pattern this file already establishes twice
+ * over. Deliberately does NOT depend on `brain_projection_*` having
+ * already run in this same tick: `POST /api/v1/brain/embeddings`
+ * (`upsertEntityEmbedding`) independently re-reads the CURRENT
+ * `brain_entity_profiles` row and rejects a result computed against a
+ * stale/nonexistent profile — the same "re-read current state, never
+ * trust delivery ordering" discipline `brain_projection_*` itself already
+ * relies on, so no ordering dependency between the two consumers is ever
+ * required for correctness.
+ *
+ * ID-minimized payload only ({eventId, organizationId, entityType,
+ * entityId}) — no profile/CRM text of any kind, mirroring
+ * leadEnrichmentConsumer's own payload exactly. Reuses
+ * claimBrainProjectionRun/completeBrainProjectionRun verbatim (a plain
+ * `workflowKey` string parameter, no code change needed in
+ * packages/brain) under a new `brain_embedding_trigger_<entity>` key
+ * family, distinct from `brain_projection_<entity>` — a redelivered event
+ * is a clean no-op at the claim layer, never reaching the webhook call.
+ * Holds no provider credential and calls no provider — see
+ * packages/brain/src/embeddings.ts's own header comment.
+ */
+function createBrainEmbeddingTriggerConsumer(entityType: EntityType): EventConsumer {
+  const workflowKey = `brain_embedding_trigger_${entityType}`;
+  const payloadIdKey = PAYLOAD_ID_KEY[entityType];
+
+  return {
+    name: workflowKey,
+    eventTypes: EVENT_TYPES_BY_ENTITY[entityType],
+    handle: async (event: DomainEvent) => {
+      const payload = event.payload as Record<string, string | null | undefined>;
+      const organizationId = payload.organization_id;
+      const entityId = payload[payloadIdKey];
+      if (!organizationId || !entityId) {
+        return; // Unreachable in practice — see createBrainProjectionConsumer's own identical guard.
+      }
+
+      const ctx = { organizationId };
+      const claimed = await claimBrainProjectionRun(ctx, { workflowKey, sourceEventId: event.id });
+      if (!claimed) {
+        return; // already processed, or a concurrent attempt is in flight — clean no-op.
+      }
+
+      const webhookUrl = process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_URL;
+      if (!webhookUrl) {
+        // Deliberately DOES NOT throw, unlike leadEnrichmentConsumer's own
+        // otherwise-identical guard — a real difference, not an
+        // inconsistency. leadEnrichmentConsumer's sole event type
+        // (visitor.identified) is comparatively rare across the ambient
+        // event stream; these three consumers share the exact same nine
+        // high-frequency contact/company/deal events contactProjectionConsumer
+        // already drains. events are selected strictly `created_at asc`
+        // (packages/database/src/events.ts), globally across every
+        // registered consumer's event types — an indefinitely-retried
+        // (thrown) delivery here would never reach a terminal state while
+        // this env var stays unset (expected for a while: no real n8n
+        // Brain Indexing workflow exists yet, per this phase's own
+        // authorized scope), permanently occupying the head of that
+        // shared queue and starving contactProjectionConsumer's own
+        // already-accepted delivery for the SAME and every LATER event —
+        // a real regression risk to Phase 2's already-accepted behavior,
+        // reproduced directly under full-suite ambient load before this
+        // fix. Returning cleanly marks event_deliveries 'delivered' for
+        // THIS consumer only (no further retry of this exact event by
+        // this consumer), while still recording an honest 'failed'
+        // workflow_runs entry for observability. An event missed this way
+        // is not lost: findProfilesNeedingEmbedding (packages/brain/src/
+        // backfill.ts) is the designed catch-up path for exactly this
+        // case, the same relationship the entity-profile backfill already
+        // has with the live projection path.
+        await completeBrainProjectionRun(ctx, { workflowKey, sourceEventId: event.id, status: "failed", error: "webhook not configured" }).catch(() => {});
+        return;
+      }
+
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      const webhookSecret = process.env.N8N_BRAIN_EMBEDDING_WEBHOOK_SECRET;
+      if (webhookSecret) {
+        headers.authorization = `Bearer ${webhookSecret}`;
+      }
+
+      try {
+        const response = await fetch(webhookUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ eventId: event.id, organizationId, entityType, entityId }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          throw new Error(`n8n webhook responded with status ${response.status}`);
+        }
+        await completeBrainProjectionRun(ctx, { workflowKey, sourceEventId: event.id, status: "succeeded" });
+      } catch (err) {
+        await completeBrainProjectionRun(ctx, {
+          workflowKey,
+          sourceEventId: event.id,
+          status: "failed",
+          error: err instanceof Error ? err.message : "trigger call failed",
+        }).catch(() => {});
+        throw err; // let dispatchPendingEvents release the delivery lease and retry on the next tick.
+      }
+    },
+  };
+}
+
+const brainEmbeddingTriggerContactConsumer = createBrainEmbeddingTriggerConsumer("contact");
+const brainEmbeddingTriggerCompanyConsumer = createBrainEmbeddingTriggerConsumer("company");
+const brainEmbeddingTriggerDealConsumer = createBrainEmbeddingTriggerConsumer("deal");
+
 export async function handleDispatchEvents(request: Request): Promise<NextResponse> {
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) {
@@ -193,6 +319,15 @@ export async function handleDispatchEvents(request: Request): Promise<NextRespon
       contactProjectionConsumer,
       companyProjectionConsumer,
       dealProjectionConsumer,
+      // Milestone 4.1 Phase 3 — notifies n8n's (future) Brain Indexing
+      // workflow that a profile may need a (re-)embedding. Same nine
+      // events, same "one dispatcher, many independent consumers"
+      // pattern, no ordering dependency on the projection consumers
+      // above — see createBrainEmbeddingTriggerConsumer's own header
+      // comment for why.
+      brainEmbeddingTriggerContactConsumer,
+      brainEmbeddingTriggerCompanyConsumer,
+      brainEmbeddingTriggerDealConsumer,
     ]);
   } catch {
     return apiError("INTERNAL_ERROR", "Dispatch failed", 500);

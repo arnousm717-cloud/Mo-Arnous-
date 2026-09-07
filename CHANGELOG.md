@@ -1484,3 +1484,160 @@ complete.**
   Review.md` "Milestone 4.1 Phase 2"). Milestone 4.1 overall, and
   Phase 4 overall, remain in progress. Not yet committed or pushed as
   of this entry.
+
+## Milestone 4.1 Phase 3 — Embedding Write-Back Foundation
+
+**Status: Phase 3 of Milestone 4.1 IMPLEMENTATION ACCEPTED. Milestone
+4.1 as a whole, and Phase 4 (AI Agents), remain IN PROGRESS — not
+complete. This repository still generates no embedding and calls no
+AI/embedding provider.**
+
+**Added**
+- **Additive `brain_embeddings` schema extension** (migration
+  `20260907090000`): three nullable columns —
+  `entity_profile_id` (composite tenant-safe FK to
+  `brain_entity_profiles`, `ON DELETE CASCADE`), `content_hash`,
+  `source_version_at` — plus a conditional CHECK
+  (`entity_profile_id is null or (content_hash is not null and
+  source_version_at is not null)`) and a partial unique index on
+  `(organization_id, entity_profile_id) WHERE entity_profile_id IS
+  NOT NULL`: exactly one current embedding row per entity profile,
+  when that identity is used. Phase 1's own general shape (a chunk
+  with no `entity_profile_id`, referenced via
+  `brain_embedding_entity_refs`) remains fully valid and untouched —
+  verified live against the migration, and every pre-existing test
+  exercising that shape passes unmodified.
+- **`upsertEntityEmbedding`** (`packages/brain/src/embeddings.ts`):
+  concurrency-safe, idempotent write-back reusing `upsertEntityProfile`'s
+  proven `SELECT ... FOR UPDATE` + bounded 2-attempt first-insert-race
+  reconciliation verbatim. Rejects a result computed from an
+  already-superseded profile snapshot (`source_version_at` older than
+  the current profile's `computed_at`); a byte-identical redelivery
+  (matching `content_hash`) is a true no-op.
+- **Deterministic content-hash contract**: sha256 hex digest of
+  `{entityType, entityId, chunkText}` (`node:crypto` only, no
+  dependency added) — content identity, not row identity (row identity
+  is `entity_profile_id`).
+- **`POST /api/v1/brain/embeddings`**: API-key-authenticated write-back
+  endpoint, new `brain:embeddings:write` scope (no schema change
+  needed — `api_keys.scopes` is an unconstrained jsonb array).
+  `organization_id` always resolved from the authenticated actor, never
+  the request body. Vector validation (exactly 1536 finite numbers)
+  enforced before persistence.
+- **Three dispatcher trigger consumers**
+  (`brain_embedding_trigger_contact`/`_company`/`_deal`), registered on
+  the same nine CRM events the Phase 2 projection consumers already
+  drain, notifying a future n8n Brain Indexing workflow via an
+  ID-minimized webhook payload (`{eventId, organizationId, entityType,
+  entityId}` only).
+- **`findProfilesNeedingEmbedding`**
+  (`packages/brain/src/backfill.ts`): identification-only backfill
+  discovery — generates no vector, makes no external call. Pages
+  `brain_entity_profiles` by `id` alone (a UUID, never a timestamp),
+  deliberately immune to the `timestamptz`-cursor microsecond-precision
+  class of bug Phase 2 already had to fix once, by construction.
+- **New test coverage**: `packages/database/tests/brain-embeddings-
+  schema.test.ts` (9), `packages/brain/tests/embeddings.test.ts` (22,
+  including a fresh first-insert concurrency race test), `packages/
+  brain/tests/embedding-backfill.test.ts` (9), `apps/web/tests/brain-
+  embeddings-api.test.ts` (19, including a real logging-safety
+  regression test), plus 3 new dispatcher tests extending `apps/web/
+  tests/dispatch-events-api.test.ts`.
+
+**Changed**
+- **`authenticated` grant on `brain_embeddings` widened to include
+  `UPDATE`** (still no `DELETE`) — a deliberate, necessary extension
+  over Phase 1's original "written once, never edited in place"
+  assumption, required for idempotent update-in-place reconciliation.
+  The one pre-existing test asserting the prior grant set
+  (`brain-rls.test.ts`) was updated to assert the new exact set with a
+  strict equality check, still explicitly proving no `DELETE` grant
+  exists.
+
+**Security**
+- Payload for the new API endpoint and the new webhook trigger is
+  ID-minimized / dimension-validated before persistence; `organization_id`
+  is never caller-supplied. `chunkText`/`embedding` cannot reach any
+  structured log line — the logger's own field allowlist has no slot
+  for a request body at all, independently confirmed via a real
+  regression test against the logging-wrapped route, not merely route
+  inspection.
+- GDPR: no second erasure mechanism. A hard-erased contact's
+  `brain_entity_profiles` row cascades away via Phase 1's existing FK,
+  which in turn cascades away any Phase-3 embedding row attached to it.
+  A late write-back arriving after erasure is rejected
+  (`entity_not_found`) and resurrects nothing — proven live end-to-end,
+  including cross-tenant isolation.
+
+**Fixed / Design corrections discovered during implementation**
+- **A CHECK-constraint design defect, found and fixed before the
+  implementation turn's own report was issued** — the first draft made
+  `content_hash`/`source_version_at` unconditionally `NOT NULL` with a
+  CHECK requiring `entity_profile_id` whenever
+  `source_type='entity_profile'`, breaking 17 pre-existing, already-
+  accepted tests that legitimately exercise Phase 1's own general
+  multi-entity-chunk shape. Fixed by making the three new columns
+  nullable and the CHECK conditional (required only when
+  `entity_profile_id` is actually set).
+- **A dispatcher head-of-line-blocking risk, found and fixed before the
+  implementation turn's own report was issued** — the first draft threw
+  when the embedding webhook was unconfigured, mirroring
+  `leadEnrichmentConsumer`'s own pattern literally. Because the three
+  new consumers share the exact same high-frequency events as the
+  already-accepted Phase 2 projection consumers, an indefinitely-
+  retried failure would permanently occupy the head of the shared
+  event queue, starving Phase 2's own accepted delivery for the same
+  and every later event — reproduced live as 7 full-monorepo test
+  failures, including two pre-existing Phase 2 tests. Fixed by
+  returning cleanly (terminal, `workflow_runs`-observable, backfill-
+  recoverable) instead of throwing.
+
+**Known gaps, explicitly deferred (not oversights)**
+- Not built this phase, by design: any embedding-provider SDK or
+  credential in this repository, the actual n8n Brain Indexing
+  workflow, automatic scheduling of the backfill, semantic/vector
+  search, the retrieval client/tools, knowledge-document/email/meeting
+  multi-chunk ingestion, the continuous-learning loop, Brain UI, a
+  general end-user Brain API, any new Brain-specific RBAC permission,
+  and agent functionality of any kind.
+- **LOW** — the freshness comparison uses JS `Date` arithmetic;
+  node-pg's default `timestamptz` parser truncates to millisecond
+  precision (confirmed live). This mirrors, not introduces, an already-
+  accepted LOW limitation `upsertEntityProfile` itself carries — a
+  same-millisecond race resolves deterministically as last-write-wins
+  under a row lock, never as silent data loss.
+- **LOW** — `findProfilesNeedingEmbedding`'s UUID-keyset pagination has
+  no "new rows always sort ahead of the cursor" guarantee (unlike
+  `created_at` pagination); a profile created mid-pass could be missed
+  by that one run. Not a permanent loss — an independent live-event
+  trigger path exists, and a later backfill run's state-based predicate
+  catches it regardless of insertion order.
+- **INFORMATIONAL** — configuring the embedding webhook after an event
+  was already marked terminal (unconfigured-webhook path) does not
+  automatically replay that missed trigger; recovery requires an
+  operator (or future automation) to run the backfill discovery pass,
+  which is not yet wired to any schedule in this phase. Already
+  self-disclosed in the consumer's own code comment.
+
+**Closeout — final validation**
+- Full monorepo test suite (fresh, fully-reset, CI-equivalent default-
+  concurrency runs): **3216/3216** passed. `pnpm lint`/`typecheck`:
+  **18/18** clean. `pnpm build`: **1/1** successful,
+  `/api/v1/brain/embeddings` confirmed present in the build output.
+  `pnpm audit --audit-level=high`: **"No known vulnerabilities
+  found."** Zero new dependencies. `git diff --check` clean throughout.
+- **One controlled implementation turn** (two genuine defects found and
+  fixed during implementation itself, both described above) followed
+  by **one strict read-only Final Implementation Acceptance Audit**,
+  explicitly instructed not to trust the implementation turn's own
+  report — independently reproduced schema/constraint behavior via live
+  SQL probes, write-back/concurrency behavior via fresh standalone
+  scripts (not the existing test suite), and investigated two observed
+  CI-equivalent flakes rather than accepting them on faith, root-causing
+  both to genuine host-level CPU oversubscription (load average 11.12
+  on an 8-core machine, Postgres itself confirmed idle) rather than any
+  Phase-3 defect (**GO**, zero BLOCKER/HIGH remaining).
+- **Milestone 4.1 Phase 3 status: PASS** (`docs/13-Technical-Design-
+  Review.md` "Milestone 4.1 Phase 3"). Milestone 4.1 overall, and
+  Phase 4 overall, remain in progress. Not yet committed or pushed as
+  of this entry.
