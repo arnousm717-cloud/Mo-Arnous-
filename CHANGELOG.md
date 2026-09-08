@@ -1641,3 +1641,113 @@ AI/embedding provider.**
   Review.md` "Milestone 4.1 Phase 3"). Milestone 4.1 overall, and
   Phase 4 overall, remain in progress. Not yet committed or pushed as
   of this entry.
+
+## Milestone 4.1 Phase 4 — Tenant-Safe Semantic Retrieval Foundation
+
+**Status: Phase 4 of Milestone 4.1 IMPLEMENTATION ACCEPTED. Milestone
+4.1 as a whole, and the roadmap's own Phase 4 (AI Agents), remain IN
+PROGRESS — not complete. This repository still calls no embedding
+provider, generates no embedding, and accepts no query text.**
+
+**Added**
+- **`searchEntityProfilesByEmbedding`** (`packages/brain/src/search.ts`):
+  tenant-safe, read-only exact (non-ANN) pgvector cosine-similarity
+  search over `brain_embeddings`, accepting only an already-computed
+  1536-dimension query vector — the same "no embedding provider in
+  this repository" boundary Phase 3's write-back established, extended
+  to the read side. Dual-layer tenant isolation (RLS + explicit
+  `organization_id` SQL predicate on both joined tables), SQL-side
+  freshness exclusion (`source_version_at >= computed_at`, before
+  ranking), deterministic ordering (cosine distance, then
+  `entity_profile_id` UUID tie-break), and a minimized 5-field result
+  shape (`entityProfileId`/`entityType`/`entityId`/`similarity`/
+  `sourceVersionAt` — never `chunk_text`, the raw vector, or CRM
+  content).
+- **`POST /api/v1/brain/search`**: API-key-authenticated retrieval
+  endpoint, new `brain:embeddings:read` scope (no schema change
+  needed). Accepts `queryVector`, optional `limit` (default 10, max
+  50), `entityType`, `minSimilarity` — never `query`/`queryText`/
+  `text`/`prompt`. Zero matches returns `200 {"results": []}`.
+- **New test coverage**: `packages/brain/tests/search.test.ts` (36),
+  `apps/web/tests/brain-search-api.test.ts` (20) — real Postgres
+  throughout, no ranking behavior mocked; fixtures written through the
+  real `upsertEntityEmbedding`/write-back-handler paths.
+
+**Security**
+- Dual-layer tenant isolation live-verified via `EXPLAIN`: the
+  `organization_id` predicate is materially present in the executed
+  query plan on both joined tables, not merely in SQL text.
+  `organization_id` always comes from the resolved API-key actor,
+  never the request body. `queryVector` cannot reach any structured
+  log line — the logger's field allowlist has no slot for a request
+  body at all, confirmed both for the success path and the
+  zero-norm-rejection path added below.
+- GDPR: no second erasure mechanism. Retrieval relies entirely on the
+  existing cascade (Phase 1's/Phase 3's `ON DELETE CASCADE` chain) — an
+  erased entity's embedding is structurally unreachable by search,
+  proven live end-to-end.
+- No ANN index (HNSW/IVFFlat) added — an intentional exact scan,
+  appropriate at current/near-term per-tenant row scale
+  (`02-Software-Architecture.md` §6's own named revisit trigger points
+  at Phase 5 email/meeting volume, not this phase).
+
+**Fixed — found during the Final Implementation Acceptance Audit, corrected before final acceptance**
+- **HIGH — zero-norm vector defect.** pgvector's `<=>` operator returns
+  `NaN` when either the query or a stored vector has zero norm
+  (live-confirmed against pgvector 0.8.2), which Phase 3's own accepted
+  write validation (dimension/finiteness only) does not reject. Two
+  live-reproduced consequences: `similarity` silently serialized as
+  `null` over JSON despite its declared `number` type, and — because
+  Postgres's `float8` ordering defines `NaN` as the maximum value — a
+  degenerate stored row satisfied `minSimilarity` at *any* threshold,
+  including `1.0`. Not a cross-tenant leak — a same-tenant data-
+  integrity defect. **Corrected on both sides**: an all-zero query
+  vector is now rejected (`isZeroNormVector`) before any SQL executes,
+  live-proven to short-circuit in 1ms without reaching the database; a
+  zero-norm stored row is now excluded from candidacy by an
+  unconditional `vector_norm(be.embedding) > 0` predicate (a real
+  pgvector 0.8.2 function), applied before similarity projection,
+  `minSimilarity` filtering, ordering, or `LIMIT`. Phase 3's write-time
+  validation was deliberately left unchanged — the read-side defense is
+  unconditional and already neutralizes any zero-norm row regardless of
+  how or when it was written. 8 new regression tests cover this
+  permanently (36 domain / 20 API total, up from 30/18 before
+  correction).
+
+**Known gaps, explicitly deferred (not oversights)**
+- Not built this phase, by design: any embedding-provider SDK or
+  credential in this repository, query-text-to-vector generation,
+  natural-language semantic search, RAG, hybrid/BM25 search,
+  reranking, ANN indexing, the `brain.semantic_search` agent tool
+  itself, any agent/orchestrator/tool-execution layer, Brain UI, a
+  general end-user Brain API, any new Brain-specific RBAC permission,
+  and Milestone 4.2 scope of any kind.
+- **INFORMATIONAL (future, optional hardening, not a Phase-4
+  blocker)** — Phase 3's write-time vector validation could
+  additionally reject a zero-norm embedding at persistence time, so a
+  degenerate row could never be written in the first place. Not
+  required for Phase 4's correctness: the read-side defense above is
+  unconditional and already safe against any existing or future
+  zero-norm row regardless of origin.
+
+**Closeout — final validation**
+- Full monorepo test suite (fresh, fully-reset, CI-equivalent runs,
+  both serial and default-concurrency): **3272/3272** passed, twice.
+  `pnpm lint`/`typecheck`: **18/18** clean. `pnpm build`: **1/1**
+  successful, `/api/v1/brain/search` confirmed present in the build
+  output. `pnpm audit --audit-level=high`: **"No known vulnerabilities
+  found."** Zero new dependencies. No migration added — the existing
+  Phase 1/3 schema was sufficient. `git diff --check` clean throughout.
+- **One controlled implementation turn**, followed by **one strict
+  read-only Final Implementation Acceptance Audit** that found and
+  live-reproduced the HIGH zero-norm defect above (**NO-GO**), **one
+  narrowly-scoped targeted correction turn**, and **one strict
+  read-only Final Re-Acceptance Audit** that independently reproduced
+  the original defect scenario against fresh Postgres fixtures,
+  confirmed it no longer occurs at every `minSimilarity` threshold, and
+  reconfirmed every other previously-accepted finding was undisturbed
+  (**GO**, zero BLOCKER/HIGH remaining).
+- **Milestone 4.1 Phase 4 status: PASS** (`docs/13-Technical-Design-
+  Review.md` "Milestone 4.1 Phase 4"). Milestone 4.1 overall, and the
+  roadmap's own Phase 4 overall, remain in progress. Not yet staged,
+  committed, or pushed as of this entry.

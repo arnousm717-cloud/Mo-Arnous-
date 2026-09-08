@@ -35,3 +35,13 @@ export {
   type EmbeddingWriteBackInput,
   type EmbeddingWriteBackResult,
 } from "./embeddings";
+export {
+  searchEntityProfilesByEmbedding,
+  resolveSearchLimit,
+  isZeroNormVector,
+  SearchValidationError,
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_MAX_LIMIT,
+  type SearchEntityProfilesInput,
+  type EntityProfileSearchResult,
+} from "./search";

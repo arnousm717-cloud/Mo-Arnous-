@@ -6048,3 +6048,259 @@ semantic search, the retrieval client, knowledge-document/email/meeting
 ingestion, and every agent-facing capability remain unbuilt. Milestone
 4.1 is not complete, and Phase 4 has not materially progressed beyond
 these three foundation phases.
+
+## Milestone 4.1 Phase 4 — Tenant-Safe Semantic Retrieval Foundation
+
+**Milestone 4.1 — Brain Foundation.** **Status: Phase 4 (Tenant-Safe
+Semantic Retrieval Foundation) IMPLEMENTATION ACCEPTED. Milestone 4.1
+as a whole, and Phase 4 of the roadmap's own "AI Agents" phase as a
+whole, remain IN PROGRESS, not complete.** Delivered as one controlled
+implementation turn, followed by a strict read-only Final
+Implementation Acceptance Audit that independently re-derived every
+claim from source, live Postgres probes, and fresh command runs. That
+audit found and reported one genuine **HIGH** defect — see "The
+zero-norm defect" below — resulting in an initial **NO-GO**. A
+narrowly-scoped targeted correction turn then closed it, followed by a
+second strict read-only Final Re-Acceptance Audit that independently
+reproduced the original defect against real Postgres, confirmed it no
+longer reproduces, and re-verified every other previously-accepted
+finding was undisturbed — **GO**, zero BLOCKER, zero HIGH remaining. As
+of this entry the working tree contains the phase's 7
+implementation/test paths as untracked/modified files against
+`origin/main` (`858287e86dd84427e55e1d5aa635b55b5b6cae5b`) — **not yet
+staged, committed, or pushed**.
+
+### Scope actually authorized and delivered
+
+A tenant-safe, read-only vector similarity retrieval foundation over
+Phase 3's own embedding storage — the persistence/notification layer
+Phase 3 built now has a matching read path. Explicitly **not** in scope
+this phase and **not built**: any embedding-provider SDK or credential
+in this repository, query-text-to-vector generation, natural-language
+semantic search, retrieval-augmented generation (RAG), hybrid/BM25
+search, reranking, ANN indexing (HNSW/IVFFlat), the `brain.semantic_search`
+agent tool itself (`11-AI-Revenue-Brain.md` §5 — this phase is its
+foundation, not its delivery), any agent/orchestrator/tool-execution
+layer, Brain UI, a general end-user Brain API, any new staff-facing
+Brain RBAC permission, and Milestone 4.2 scope of any kind.
+
+### Domain retrieval function
+
+`searchEntityProfilesByEmbedding` (`packages/brain/src/search.ts`)
+accepts only an already-computed 1536-dimension query vector — the
+exact same "this repository never calls an embedding provider" boundary
+Phase 3's write-back already established, extended to the read side.
+Vector validation reuses Phase 3's own `isValidEmbeddingVector`
+(`packages/brain/src/embeddings.ts`) directly — dimension and
+finiteness only, no duplicated logic. One parameterized SQL query joins
+`brain_embeddings`/`brain_entity_profiles`; every dynamic value
+(organization id, vector literal, entity type, threshold, limit) is a
+bound parameter, never string-interpolated — independently verified
+adversarially during acceptance audit, no injection surface found.
+
+### Cosine similarity and index strategy
+
+pgvector's cosine **distance** operator (`<=>`) only — similarity is
+computed as `1 - distance`. Deliberately not the inner-product operator
+(`<#>`): no normalization logic exists anywhere in this codebase for
+either a caller-supplied query vector or a stored embedding, and cosine
+similarity is scale-invariant by definition, so ranking correctness
+never depends on an unenforced normalization assumption. No ANN index
+(HNSW/IVFFlat) exists or was added — an intentional exact (sequential)
+scan, live-confirmed via `EXPLAIN` during acceptance audit to correctly
+push the tenant predicate down into the plan on both joined tables;
+appropriate at this milestone's realistic per-tenant row scale,
+consistent with `02-Software-Architecture.md` §6's own pre-existing
+pgvector revisit-trigger, which names Phase 5 email/meeting ingestion
+volume — not this phase — as the actual pressure point that would
+justify an index. Ordering is deterministic: `ORDER BY <cosine
+distance> ASC, entity_profile_id ASC` — a stable UUID tie-break for
+equal-distance rows, never a timestamp, avoiding any variant of the
+millisecond-precision issue class Phase 2's own pagination fix already
+closed once.
+
+### Tenant isolation — defense-in-depth, both layers live-verified
+
+Both defenses required, neither alone: `withTenantContext` sets the RLS
+session context (`current_org()`, confirmed live that RLS is enabled
+with `_select_own` policies on both `brain_embeddings` and
+`brain_entity_profiles`, `organization_id = current_org()`), **and**
+the query's own `WHERE` clause repeats `organization_id = $1` explicitly
+against both joined tables. `organization_id` is sourced only from the
+resolved API-key service actor (`resolveScopedServiceActor`), never
+from the request body/query/header — a caller cannot select another
+organization by any means; independently confirmed by reading
+`apps/web/app/api/v1/brain/search/handlers.ts` in full. Live-verified
+during acceptance audit via `EXPLAIN`: the tenant predicate is
+materially present in the executed plan, not merely in SQL text.
+Cross-tenant tests (real two-organization fixtures, identical query
+vectors) pass at both the domain and HTTP layers.
+
+### Freshness
+
+Only embeddings whose own `source_version_at` is at least as new as
+the **current** `brain_entity_profiles.computed_at` are candidates —
+excluded in the SQL `WHERE` clause itself, before ranking, never
+ranked-then-filtered afterward. The comparison runs entirely inside
+Postgres (`timestamptz >= timestamptz`), never round-tripped through
+node-pg's own millisecond-truncating `Date` parser — an improvement
+over, not a repetition of, the JS-side comparison
+`upsertEntityEmbedding` itself still carries (Phase 3's own accepted
+LOW limitation, unchanged and untouched by this phase).
+
+### Result minimization
+
+Exactly five fields: `entityProfileId`, `entityType`, `entityId`,
+`similarity`, `sourceVersionAt` — never `chunk_text`, the raw
+embedding, profile JSON, or any CRM field (name/email/company/notes/
+activity content). No `isStale` field: because staleness is excluded
+by construction (previous section), every returned row is, by
+definition, fresh — the field would be redundant, not informative.
+Verified by a dedicated test asserting the exact key set at both the
+domain and HTTP layers, and that a seeded secret value never appears in
+the serialized response.
+
+### API / service scope
+
+`POST /api/v1/brain/search`, API-key-authenticated, new
+`brain:embeddings:read` scope (no schema migration needed —
+`api_keys.scopes` is an unconstrained jsonb array, same precedent
+Phase 3 already established for `brain:embeddings:write`). Request
+body accepts only `queryVector`, optional `limit`
+(`DEFAULT_LIMIT = 10`, `MAX_LIMIT = 50`), optional `entityType`
+(`contact`/`company`/`deal`), optional `minSimilarity`
+(finite, `[-1, 1]`) — `query`/`queryText`/`text`/`prompt` are all
+rejected as unknown fields, since no query-text-to-vector step exists
+anywhere in this repository. Zero matches returns `200 {"results":
+[]}`, never an error. PII/logging boundary is structural, not a
+convention: the structured request logger's field allowlist
+(`apps/web/app/api/v1/_shared/logger.ts`) has no slot for a request
+body at all, so `queryVector` cannot reach any log line regardless of
+route code — independently confirmed by reading the logger's full
+source and by a real regression test against the logging-wrapped
+route, covering both the success path and the zero-norm-rejection
+path added by the correction below.
+
+### The zero-norm defect — identified during acceptance, corrected, re-accepted
+
+The Final Implementation Acceptance Audit found, live-reproduced, and
+classified **HIGH** (not a hypothetical): pgvector's `<=>` operator
+returns `NaN` when either operand is a true zero-norm vector — live-
+confirmed against pgvector 0.8.2. Phase 3's own accepted vector
+validation (`isValidEmbeddingVector`, dimension/finiteness only) does
+not, and correctly should not, reject an all-zero vector as a *write*
+contract — but Phase 4 is the first code in this repository that
+*computes with* a stored vector, and an all-zero vector's `NaN`
+distance had two live-reproduced consequences: the API-visible
+`similarity` field silently became `null` despite the declared
+`number` type (JSON has no `NaN` representation), and — because
+Postgres's `float8` total ordering defines `NaN` as the maximum
+value — a degenerate zero-norm row satisfied `minSimilarity` at *any*
+threshold, including `1.0`, the strictest possible setting. Not a
+cross-tenant leak (independently confirmed both before and after
+correction) — a same-tenant data-integrity/contract-violation defect.
+
+**Correction, both sides of the boundary**: (1) `isZeroNormVector`
+(`packages/brain/src/search.ts`) rejects an all-zero **query** vector
+in both the domain function and `validateSearchRequest`, before any
+SQL executes — live-proven via a probe using a deliberately-invalid
+`organizationId` that would surface a Postgres error if the database
+were ever reached; the rejection completed in 1ms, proving it never
+was. (2) `vector_norm(be.embedding) > 0` — a real pgvector 0.8.2
+function, confirmed live before use — is an unconditional predicate in
+the candidate `WHERE` clause, excluding a zero-norm **stored** row
+(which Phase 3's write contract still legally permits, and does not
+need to change — Phase 4's defense is unconditional regardless of how
+or when such a row was written) before similarity projection,
+`minSimilarity` filtering, ordering, or `LIMIT`. Independently
+reproduced end-to-end during the Final Re-Acceptance Audit: a zero-norm
+stored row excluded at `minSimilarity` 1, 0, and -1 alike; a mixed
+valid/zero-norm candidate set returns only the valid row, every
+returned `similarity` a finite JS number, never `null`/`NaN`/`Infinity`.
+6 new domain tests and 2 new API tests cover this regression
+permanently. Zero-norm-vector rejection at Phase 3's own *write* time
+remains an **optional, separate, future hardening item** — not
+required for Phase 4's correctness, since the read-side defense is
+unconditional and already neutralizes any zero-norm row regardless of
+origin.
+
+### GDPR / hard-erasure interaction
+
+No second erasure mechanism. Retrieval relies entirely on Phase 1's
+existing cascade: a hard-erased contact's `brain_entity_profiles` row
+cascades away via its own `ON DELETE CASCADE`, which in turn cascades
+away any attached embedding via Phase 3's `entity_profile_id` FK (also
+`ON DELETE CASCADE`) — an erased entity's embedding is therefore
+structurally unreachable by search, proven live end-to-end (fixture
+created, confirmed retrievable, hard-erased via the same real cascade-
+delete mechanism Phase 3's own GDPR test already established as the
+correct "no second erasure system" pattern, confirmed unretrievable
+afterward).
+
+### Audit trail
+
+1. **Discovery + Pre-Implementation Audit** (strict read-only):
+   reconstructed current Brain state from live schema/source; confirmed
+   zero vector index, zero normalization logic, zero use of pgvector
+   similarity operators anywhere existed yet; recommended this
+   narrower foundation (query-vector-only, no ANN index, dual tenant
+   defense, no query-text boundary) over the full target
+   `brain.semantic_search` tool — **GO**.
+2. **Controlled Implementation**: full scope above delivered in one
+   turn — 30 domain tests, 19 API tests, all passing on first run;
+   lint/typecheck/build/audit/`git diff --check` all clean.
+3. **Final Implementation Acceptance Audit** (strict read-only):
+   independently re-verified every claim from source and live probes;
+   found and live-reproduced the zero-norm defect above, classified
+   **HIGH** — **NO-GO**.
+4. **Targeted Correction**: the zero-norm defense described above,
+   plus 8 new regression tests (36 domain, 20 API total) — full
+   monorepo suite re-verified clean (**9/9 tasks, 3272/3272 tests**,
+   both serial and default-concurrency, twice).
+5. **Final Re-Acceptance Audit** (strict read-only): independently
+   re-read every changed line of source, independently re-verified
+   `vector_norm` exists live in pgvector 0.8.2 before trusting its use,
+   independently reproduced the original defect scenario against fresh
+   temporary Postgres fixtures and confirmed it no longer occurs at
+   `minSimilarity` 1/0/-1 and in a mixed valid/zero-norm candidate set,
+   independently confirmed every other previously-accepted finding
+   (cosine correctness, tenant isolation, freshness, Phase-3
+   compatibility) was undisturbed — **GO**, zero BLOCKER, zero HIGH.
+
+### Final validation (Final Re-Acceptance Audit, fresh)
+
+Full monorepo test suite: **3272/3272** passed (fresh
+`turbo run test --force` runs, both `--concurrency=1` and default
+concurrency, twice each). `pnpm lint`/`typecheck`: **18/18** clean.
+`pnpm build`: **1/1** successful, `/api/v1/brain/search` confirmed
+present in the build output. `pnpm audit --audit-level=high`: **"No
+known vulnerabilities found."** Zero new dependencies —
+`pnpm-lock.yaml` untouched. `git diff --check` clean throughout. No
+migration was added — the existing Phase 1/3 schema (RLS, grants,
+`entity_profile_id`/`content_hash`/`source_version_at`) was sufficient
+for this phase's read-only query.
+
+### Deviations from the M4.1 Phase 4 authorization
+
+1. The zero-norm query/stored-vector defense described above was not
+   part of the original implementation turn — it was added in a
+   dedicated, narrowly-scoped targeted correction turn after the Final
+   Implementation Acceptance Audit found and classified it **HIGH**,
+   per the audit trail above. No other deviation from the original
+   authorization occurred.
+
+**Milestone 4.1 Phase 4: PASS.** The tenant-safe semantic retrieval
+foundation — exact pgvector cosine-similarity search over a
+caller-supplied query vector, dual-layer tenant isolation, SQL-side
+freshness exclusion, deterministic ordering, minimized result shape,
+and zero-norm safety on both the query and stored-vector sides — is
+live, adversarially verified via independent live-Postgres
+reproduction across two full audit rounds (the second following a
+genuine correction cycle, not a rubber-stamp re-check), and free of
+BLOCKER/HIGH findings. This repository still calls no embedding
+provider, accepts no query text, and performs no natural-language
+semantic search — query-text-to-vector generation, RAG, hybrid/BM25
+search, reranking, the `brain.semantic_search` agent tool itself, and
+every agent-facing capability remain unbuilt. Milestone 4.1 is not
+complete, and the roadmap's own Phase 4 (AI Agents) has not materially
+progressed beyond these four foundation phases.
