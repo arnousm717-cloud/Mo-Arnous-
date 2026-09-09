@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { dispatchPendingEvents, type DomainEvent, type EventConsumer } from "@ai-revenue-os/database";
 import {
@@ -17,6 +16,7 @@ import {
   type EntityType,
 } from "@ai-revenue-os/brain";
 import { apiError } from "../../v1/_shared/api-error";
+import { timingSafeEqualStrings } from "../_shared/cron-auth";
 
 /**
  * Milestone 3.3F — GET /api/internal/dispatch-events. The cron-driven
@@ -40,16 +40,6 @@ import { apiError } from "../../v1/_shared/api-error";
  * comment for the full reasoning. This route's only remaining job is
  * CRON_SECRET verification and invoking one bounded dispatch pass.
  */
-
-function timingSafeEqualStrings(a: string, b: string): boolean {
-  // Hash both sides first — the same discipline verifyApiKey (packages/
-  // auth/src/api-keys.ts) already established — so timingSafeEqual never
-  // has to handle variable-length inputs (it throws on length mismatch,
-  // which would itself leak length information via the exception path).
-  const hashA = createHash("sha256").update(a, "utf8").digest();
-  const hashB = createHash("sha256").update(b, "utf8").digest();
-  return timingSafeEqual(hashA, hashB);
-}
 
 /**
  * The one consumer this milestone ships: Lead Enrichment, triggered by

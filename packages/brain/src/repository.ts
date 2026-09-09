@@ -234,9 +234,98 @@ export async function claimBrainProjectionRun(
   });
 }
 
+/**
+ * Milestone 4.1 Phase 5 — Automated Embedding-Trigger Recovery: a
+ * recovery-specific claim function, deliberately SEPARATE from
+ * `claimBrainProjectionRun` above rather than a modification to it.
+ *
+ * `claimBrainProjectionRun`'s own reclaim guard treats `'succeeded'` as
+ * permanent — correct for its EXISTING synchronous consumers (Phase 2/3
+ * projection, contact-scoped post-enrichment scoring), where the actual
+ * work completes IN-PROCESS before `'succeeded'` is ever written, so
+ * "succeeded" genuinely does mean "done." Phase 5's recovery notification
+ * is different: `'succeeded'` only certifies that n8n's webhook receiver
+ * ACCEPTED the request (HTTP 2xx) — never that the asynchronous
+ * downstream work (provider call, `POST /api/v1/brain/embeddings`
+ * write-back) actually completed. Treating that acceptance as permanent
+ * proof of success (Final Implementation Acceptance Audit finding, HIGH,
+ * corrected here) meant a profile whose embedding never materialized
+ * after a successfully-delivered notification could never be retried,
+ * silently defeating this phase's own "self-healing" purpose.
+ *
+ * This function adds exactly one additional reclaim condition to the
+ * otherwise-identical pattern: a `'succeeded'` row is ALSO reclaimable
+ * once its own `completed_at` is older than
+ * `EMBEDDING_RECOVERY_COOLDOWN_SECONDS` — giving n8n's asynchronous
+ * workflow real time to complete before this system considers retrying,
+ * while still eventually retrying if it never does.
+ * `claimBrainProjectionRun` itself is completely untouched by this
+ * addition — every existing consumer (`brain_projection_*`,
+ * `brain_embedding_trigger_*`, `lead_scoring_post_enrichment`) keeps its
+ * own permanent-succeeded-dedupe semantics exactly as before; this
+ * function is only ever used by the Phase-5 recovery route, under its own
+ * separate `brain_embedding_recovery_<entity>` workflow-key namespace.
+ *
+ * Ground truth for whether a retry is actually still NEEDED never lives
+ * here — `findEmbeddingRecoveryCandidates` (`backfill.ts`) re-derives
+ * that fresh from `brain_embeddings`/`brain_entity_profiles` on every
+ * call. This function only controls whether a NOTIFICATION may be
+ * re-sent, never whether one is still warranted — a profile whose
+ * embedding has already materialized simply never becomes a candidate
+ * again, independent of any `workflow_runs` state, cooldown included.
+ *
+ * `EMBEDDING_RECOVERY_COOLDOWN_SECONDS` (900s = 15 minutes) deliberately
+ * matches the recovery cron's own every-fifteen-minutes cadence
+ * (`apps/web/vercel.json`'s own cron entry for this route) — one full
+ * recovery cycle of real-world headroom for
+ * n8n's asynchronous embedding-generation workflow to complete, without
+ * introducing a second, independent timing constant unrelated to any
+ * existing one in this codebase. Deliberately distinct from, and never a
+ * replacement for, `CLAIM_LEASE_SECONDS` above (that constant governs
+ * crash-recovery of a still-'running' claim — an entirely different
+ * scenario from "the claim completed, but did the real-world effect it
+ * requested actually happen").
+ */
+const EMBEDDING_RECOVERY_COOLDOWN_SECONDS = 900;
+
+export async function claimEmbeddingRecoveryAttempt(
+  ctx: RequestContext & { organizationId: string },
+  input: { workflowKey: string; sourceEventId: string; contactId?: string },
+): Promise<boolean> {
+  return withTenantContext(ctx, async (client) => {
+    const result = await client.query<{ id: string }>(
+      `insert into public.workflow_runs (organization_id, workflow_key, source_event_id, contact_id, status, started_at, completed_at)
+       values ($1, $2, $3, $4, 'running', now(), null)
+       on conflict (organization_id, workflow_key, source_event_id) do update set
+         status = 'running',
+         started_at = now(),
+         completed_at = null,
+         contact_id = excluded.contact_id,
+         attempt_count = public.workflow_runs.attempt_count + 1
+       where public.workflow_runs.status = 'failed'
+          or (public.workflow_runs.status = 'running' and public.workflow_runs.started_at < now() - make_interval(secs => $5))
+          or (public.workflow_runs.status = 'succeeded' and public.workflow_runs.completed_at < now() - make_interval(secs => $6))
+       returning id`,
+      [
+        ctx.organizationId,
+        input.workflowKey,
+        input.sourceEventId,
+        input.contactId ?? null,
+        CLAIM_LEASE_SECONDS,
+        EMBEDDING_RECOVERY_COOLDOWN_SECONDS,
+      ],
+    );
+    return result.rows.length > 0;
+  });
+}
+
 /** Completion bookkeeping — best-effort observability, same discipline as
  * recalculateContactScoreForEvent's own completion write. Guarded so this
- * can never downgrade an already-'succeeded' run. */
+ * can never downgrade an already-'succeeded' run. Reused unchanged by
+ * both `claimBrainProjectionRun`'s and `claimEmbeddingRecoveryAttempt`'s
+ * own callers — a reclaimed row's `status` is reset to `'running'` by the
+ * claim itself, so this function's own `status <> 'succeeded'` guard
+ * correctly permits recording that reclaimed attempt's own outcome. */
 export async function completeBrainProjectionRun(
   ctx: RequestContext & { organizationId: string },
   input: { workflowKey: string; sourceEventId: string; status: "succeeded" | "failed"; error?: string },

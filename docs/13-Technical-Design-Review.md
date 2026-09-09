@@ -6304,3 +6304,321 @@ search, reranking, the `brain.semantic_search` agent tool itself, and
 every agent-facing capability remain unbuilt. Milestone 4.1 is not
 complete, and the roadmap's own Phase 4 (AI Agents) has not materially
 progressed beyond these four foundation phases.
+
+## Milestone 4.1 Phase 5 — Automated Embedding-Trigger Recovery
+
+**Milestone 4.1 — Brain Foundation.** **Status: Phase 5 (Automated
+Embedding-Trigger Recovery) IMPLEMENTATION ACCEPTED. Milestone 4.1 as
+a whole, and the roadmap's own Phase 4 (AI Agents) as a whole, remain
+IN PROGRESS, not complete.** Note the naming collision this document
+deliberately disambiguates throughout: "M4.1 Phase 5" below is this
+milestone's own internal fifth increment — not the top-level roadmap's
+separate "Phase 5 — Automations" (`09-Development-Roadmap.md`), an
+unrelated later phase of the platform as a whole. No document named an
+"M4.1 Phase 5" in advance of this work — the Phase-4 Discovery +
+Pre-Implementation Audit found only a bag of undifferentiated
+remaining scope items, and this phase's own Discovery + Pre-
+Implementation Audit independently derived this specific, narrow scope
+as the correct next increment from a genuine, concrete operational gap
+Phase 3 had self-disclosed and left open, not from a pre-written plan.
+
+Delivered across five distinct turns, the correction cycle disclosed
+honestly rather than smoothed over: (1) a strict read-only Discovery +
+Pre-Implementation Audit recommending this exact scope; (2) one
+controlled implementation turn; (3) a strict read-only Final
+Implementation Acceptance Audit that independently live-reproduced a
+genuine **HIGH** defect — see "The zero-materialization defect" below
+— resulting in **NO-GO**; (4) a narrowly-scoped targeted correction
+turn; (5) a strict read-only Final Re-Acceptance Audit that
+independently re-derived a fresh 12-step live-Postgres reproduction of
+the original defect scenario and confirmed it no longer occurs, plus a
+live cross-tenant RLS mutation probe beyond what the correction's own
+test suite already covered — **GO**, zero BLOCKER, zero HIGH
+remaining. As of this entry the working tree contains the phase's 10
+implementation/test paths as untracked/modified files against
+`origin/main` (`db78516cb4b73fcf1b63d00c4762faac7508b4c5`) — **not yet
+staged, committed, or pushed**.
+
+### The gap this phase closes
+
+Phase 3's own accepted design (`03-Database-Architecture.md` §2.10's
+own Phase 3 note) self-disclosed, and explicitly accepted as a known
+limitation, that a live embedding-trigger delivery which becomes
+terminal (an unconfigured `N8N_BRAIN_EMBEDDING_WEBHOOK_URL` window, or
+any other one-off failure) was not automatically retried — recovery
+required an operator to manually run `findProfilesNeedingEmbedding`
+(`packages/brain/src/backfill.ts`), which was never wired to any
+schedule. This phase's own Discovery + Pre-Implementation Audit
+confirmed, independently and by direct inspection (not assumption),
+that this gap was real and still fully open at the start of this
+phase: `findProfilesNeedingEmbedding` had zero runtime callers anywhere
+in the deployed system — not a cron, not an API route, not even the
+one existing manual CLI script (`packages/database/scripts/
+brain-backfill.mjs`, which only ever invokes Phase 2's own
+`bootstrapBrainForOrganization`, a different function entirely). A
+profile whose live trigger silently failed once had, in practice, no
+path back to an embedding short of a genuine future CRM recompute.
+
+### Domain layer — a deliberately separate, repeatable discovery query
+
+`findEmbeddingRecoveryCandidates` (`packages/brain/src/backfill.ts`)
+is a new function, not a reuse or modification of
+`findProfilesNeedingEmbedding`. The existing function's own contract
+(a one-shot, forward-only-cursor sweep over `brain_sync_state`,
+correct for its own designed purpose — an operator-run, eventually-
+terminating bootstrap pass) is untouched, confirmed unmodified by
+diff and re-proven via its own unchanged 9-test suite. The new
+function re-evaluates the identical `needs_embedding` truth condition
+(no current `brain_embeddings` row, or the existing one's
+`source_version_at` older than the profile's current `computed_at`)
+fresh on every call, with no persisted cursor — the entire point being
+safe, correct behavior under periodic reinvocation, which the old
+cursor design structurally cannot provide (once its cursor reaches the
+end of an organization's profile set, every later call returns empty,
+permanently, regardless of what changes afterward). Capped per entity
+type (default 10, mirroring `packages/intelligence/src/scoring.ts`'s
+own `RECOVERY_BATCH_SIZE = 10` precedent for exactly this "bounded
+periodic recovery sweep" pattern).
+
+**Fairness without a persistent cursor**: candidate ordering is
+`md5(profile id || now())` — deterministic within one invocation
+(Postgres's `now()` is fixed for the duration of a single statement),
+but genuinely reshuffles on every separate invocation, since each call
+opens its own transaction with its own `now()`. **A genuine bug found
+and fixed during implementation itself**: the first draft truncated
+`now()` to the current UTC hour specifically to make ordering
+reproducible for near-simultaneous test calls — live-reproduced as a
+real fairness defect (a 25-candidate backlog against a 10-item cap
+never rotated within the same hour, exactly the sustained-outage
+scenario most likely to produce a large backlog in the first place).
+Corrected to full-precision `now()` before the implementation turn's
+own report was ever issued, re-proven via a dedicated rotation test.
+
+### Recovery scheduling and route
+
+`GET /api/internal/brain-embedding-recovery` (`apps/web/app/api/
+internal/brain-embedding-recovery/{handlers,route}.ts`), `CRON_SECRET`
+bearer-only auth (a shared `timingSafeEqualStrings`, newly extracted
+from `dispatch-events/handlers.ts`'s own previously-private copy into
+`apps/web/app/api/internal/_shared/cron-auth.ts` — a pure, behavior-
+preserving refactor, re-proven via `dispatch-events-api.test.ts`'s own
+unchanged 12-test suite). Cron cadence `*/15 * * * *` (`apps/web/
+vercel.json`), deliberately separate from and slower than
+`dispatch-events`'s own per-minute live-delivery cadence — this is a
+catch-up sweep, not live event delivery. Organizations are enumerated
+server-side only (no request-controlled organization), an accepted,
+disclosed scale limitation (unbatched, appropriate at this milestone's
+real target scale — `01-Vision.md`'s Year 1 wedge-validation range of
+roughly 30-60 client organizations — revisit only if production
+organization count grows enough to make one sweep's own duration a
+real concern). Re-notifies the exact same n8n Brain Indexing webhook
+boundary the live trigger already calls, with the identical
+ID-minimized payload (`{eventId, organizationId, entityType,
+entityId}` — no profile/CRM/vector content in either code or any
+test's captured payload) — never a second, divergent notification
+protocol.
+
+### The zero-materialization defect — found during acceptance, corrected, re-accepted
+
+The Final Implementation Acceptance Audit found, live-reproduced, and
+classified **HIGH** (not a hypothetical): the original implementation
+marked a recovery attempt `workflow_runs.status = 'succeeded'`
+unconditionally the instant n8n's webhook receiver returned any 2xx
+status — using the *generic*, already-accepted `claimBrainProjectionRun`
+(Phase 2/3's own claim-lease primitive) unmodified. A 2xx response
+only certifies that n8n *accepted* the request, never that its own
+asynchronous downstream work (a provider call, the
+`POST /api/v1/brain/embeddings` write-back) actually completed. Live-
+reproduced via a 12-step real-Postgres scenario: claim → simulated
+2xx → `'succeeded'` recorded → **no embedding ever written** → the
+profile still satisfied `needs_embedding` → yet an immediate reclaim,
+and — critically — a reclaim attempted after simulating **30 days**
+of elapsed time, both returned `false`. `claimBrainProjectionRun`'s
+own reclaim guard has no time-based escape from `'succeeded'` at all;
+that profile version was **permanently, unconditionally** unreachable
+by recovery, for any elapsed time, defeating this phase's own stated
+"self-healing" purpose. Not a cross-tenant leak — a same-tenant
+data-integrity/contract-violation defect, initially resulting in
+**NO-GO**.
+
+**Correction — Option C of four evaluated designs, the only one
+requiring no migration and no change to generic semantics**: a new,
+Phase-5-exclusive claim function, `claimEmbeddingRecoveryAttempt`
+(`packages/brain/src/repository.ts`), sharing the identical atomic
+`INSERT ... ON CONFLICT ... DO UPDATE ... WHERE` pattern as
+`claimBrainProjectionRun`, with exactly one added reclaim disjunct:
+`status = 'succeeded' AND completed_at < now() - 900 seconds`.
+`claimBrainProjectionRun` itself is untouched — confirmed via diff
+isolation of its own function body, and re-proven via
+`repository.test.ts`'s own unchanged 13-test suite — every existing
+consumer (`brain_projection_*`, `brain_embedding_trigger_*`,
+`lead_scoring_post_enrichment`) keeps its own permanent-succeeded-
+dedupe semantics exactly as before, because those workflows complete
+their real work synchronously, in-process, before `'succeeded'` is
+ever written — a materially different situation from Phase 5's
+asynchronous n8n round-trip. `completeBrainProjectionRun` is reused
+completely unchanged by both claim functions: a reclaimed row's own
+`status` is reset to `'running'` by the claim itself, so that
+function's existing `status <> 'succeeded'` downgrade guard correctly
+permits recording the reclaimed attempt's own new outcome.
+
+`EMBEDDING_RECOVERY_COOLDOWN_SECONDS = 900` (15 minutes) — deliberately
+distinct from, and never a replacement for, the pre-existing
+`CLAIM_LEASE_SECONDS = 120` (which governs crash-recovery of a
+still-`'running'` claim, an unrelated scenario). Matches the recovery
+cron's own 15-minute cadence exactly: one full recovery cycle of
+real-world headroom for n8n's asynchronous workflow to complete before
+this system considers retrying, without introducing an unrelated
+second timing constant. The boundary is a strict `<` (exactly 900s old
+still counts as within cooldown, live-verified via a dedicated
+boundary test at 899s/901s). Materialization ground truth never moved
+into `workflow_runs` at all — `findEmbeddingRecoveryCandidates`
+remains the sole source of truth, re-derived fresh from
+`brain_embeddings`/`brain_entity_profiles` on every call; a fresh
+embedding removes a profile from candidacy regardless of any cooldown
+state, live-verified even 10,000+ seconds past cooldown with zero
+reclaim attempted, at both the domain and HTTP layers.
+
+**A genuinely fragile adjacent bug found and fixed while writing the
+correction's own regression test, not left as a workaround**: the
+correction's first regression test failed because
+`node-pg`'s default `timestamptz` parser returns a JS `Date` object,
+and the recovery event-id derivation's template-literal string
+coercion of that value silently called the locale/timezone-dependent
+`Date.prototype.toString()`, not a stable representation — live-
+confirmed (`String(Date)` produced a full locale-formatted string, not
+an ISO timestamp). Fixed at the source: `findEmbeddingRecoveryCandidatesForEntity`'s
+own SQL now casts `ep.computed_at::text`, making the runtime value a
+genuine, deterministic string independent of the calling Node
+process's own locale — live-verified stable across separate statement
+executions and a real table round-trip. Not a HIGH finding — the fix
+makes an already-correct design robust against a real-world Vercel
+deployment's multiple compute instances potentially differing in
+ambient locale, rather than merely happening to work by accident in a
+single test process.
+
+### Deterministic retry identity
+
+`deriveEmbeddingRecoveryEventId(profileId, computedAt)` — sha256 of
+`{profileId}:{computedAt}`, first 16 bytes formatted as UUID syntax
+(`workflow_runs.source_event_id` is a `uuid` column, not free text).
+Same profile, same `computedAt` → same id → the cooldown mechanism
+above governs reclaim. A later recompute → a different `computedAt` →
+a different id → immediately claimable as a fresh state, independent
+of and never blocked by the old state's own still-active cooldown —
+live-verified at both layers. No cross-tenant collision risk:
+`profileId` is already globally unique, and `workflow_runs`' own
+composite unique key `(organization_id, workflow_key, source_event_id)`
+provides an independent tenant-scoping layer regardless — live-proven
+via a direct cross-tenant RLS probe during the Final Re-Acceptance
+Audit (session context set to organization B, a direct `SELECT`/
+`UPDATE` attempt against organization A's real row by its exact id:
+zero visible rows, `UPDATE 0`).
+
+### Failure and fairness behavior
+
+A non-2xx/network failure marks the row `'failed'`, immediately
+reclaimable on the very next invocation with no cooldown applied —
+live-verified, and deliberately not the same rule as the succeeded
+case, since a genuinely-down webhook should be retried promptly, not
+throttled. `attempt_count` (a pre-existing `workflow_runs` column)
+increments across every reclaim and remains observability metadata
+only — never a terminal cutoff; a hard dead-letter design was
+explicitly rejected during correction design as recreating the exact
+same class of defect in a different form. Per-run/per-entity-type
+candidate cap plus the cooldown together bound retry rate without ever
+permanently closing the door on recovery. **Accepted, disclosed
+limitation, unchanged from the correction design**: candidate
+discovery does not itself know about cooldown state, so a still-
+cooling-down candidate can occupy one of a run's limited slots even
+though its own reclaim will just be skipped — a mild efficiency loss,
+not a correctness defect, already mitigated by the rotation mechanism
+above. Fairness across a large, sustained backlog is **probabilistic**
+(hash-based rotation), not a formally-guaranteed starvation bound —
+stated precisely, not oversold.
+
+### GDPR
+
+No second erasure mechanism. Candidate discovery re-derives from live
+current state on every call, so an erased entity's profile — already
+structurally removed by the existing cascade — is never a candidate,
+live-verified including a genuine erase-mid-scenario race test. Late
+Phase-3 write-back after erasure still correctly rejects with
+`entity_not_found`, unchanged.
+
+### Audit trail
+
+1. **Discovery + Pre-Implementation Audit** (strict read-only):
+   independently reconstructed current Brain operational state;
+   confirmed `findProfilesNeedingEmbedding` has zero runtime callers
+   anywhere; compared six candidate Phase-5 directions against
+   customer value, architectural necessity, and repo readiness;
+   recommended this exact scope over query-text embedding (crosses the
+   provider boundary for the first time), RAG (every prerequisite
+   absent), and an agent tool (zero agent runtime exists) — **GO**.
+2. **Controlled Implementation**: full scope delivered in one turn —
+   18 domain tests, 18 API tests, all passing on first run;
+   lint/typecheck/build/audit/`git diff --check` all clean.
+3. **Final Implementation Acceptance Audit** (strict read-only):
+   independently re-verified every claim; found and live-reproduced
+   the zero-materialization defect above via a mandatory 12-step
+   real-Postgres scenario the audit itself constructed — **NO-GO**.
+4. **Targeted Correction**: evaluated four design options (§ above),
+   selected the narrowest (a Phase-5-exclusive claim function, no
+   migration, no change to generic semantics); found and fixed the
+   adjacent `computed_at`/`Date`-coercion bug while writing the
+   correction's own regression test; 8 new/updated tests (23 domain,
+   20 API total) — full monorepo suite re-verified clean (**9/9
+   tasks, 3315/3315 tests**, both serial and default-concurrency).
+5. **Final Re-Acceptance Audit** (strict read-only): independently
+   re-read every changed line of source; independently re-ran the full
+   12-step reproduction from scratch (fresh probe, not reused code);
+   independently built and ran a live cross-tenant RLS mutation probe
+   beyond what the existing test suite already covered; re-confirmed
+   `claimBrainProjectionRun` byte-unchanged and every Phase-2/3/4
+   regression suite green — **GO**, zero BLOCKER, zero HIGH.
+
+### Final validation (Final Re-Acceptance Audit, fresh)
+
+Full monorepo test suite: **3315/3315** passed (fresh
+`turbo run test --force` runs, both `--concurrency=1` and default
+concurrency). `pnpm lint`/`typecheck`: **18/18** clean. `pnpm build`:
+**1/1** successful, `/api/internal/brain-embedding-recovery` confirmed
+present in the build output. `pnpm audit --audit-level=high`: **"No
+known vulnerabilities found."** Zero new dependencies —
+`pnpm-lock.yaml` untouched. `git diff --check` clean throughout. No
+migration was added — the existing `workflow_runs` schema (`status`,
+`attempt_count`, `started_at`, `completed_at`) was fully sufficient
+for the corrected recovery semantics.
+
+### Deviations from the M4.1 Phase 5 authorization
+
+1. The zero-materialization defense described above (the dedicated
+   `claimEmbeddingRecoveryAttempt` claim function and its cooldown)
+   was not part of the original implementation turn — it was added in
+   a dedicated, narrowly-scoped targeted correction turn after the
+   Final Implementation Acceptance Audit found and classified it
+   **HIGH**, per the audit trail above.
+2. The `computed_at::text` fix to `findEmbeddingRecoveryCandidatesForEntity`
+   (`packages/brain/src/backfill.ts`) was not part of the original
+   implementation turn either — found and fixed during the targeted
+   correction turn, directly adjacent to and required by the
+   correction's own regression test. No other deviation from the
+   original authorization occurred.
+
+**Milestone 4.1 Phase 5: PASS.** Automated Embedding-Trigger Recovery
+— state-based, repeatable candidate discovery with no persistent
+cursor; a scheduled, tenant-isolated recovery route re-notifying the
+existing n8n Brain Indexing boundary; and a genuinely self-healing
+retry contract (immediate duplicate suppression, eventual retry after
+a persisted cooldown, permanent suppression only once a fresh
+embedding actually exists) — is live, adversarially verified via
+independent live-Postgres reproduction across two full audit rounds
+(the second following a genuine correction cycle that closed a
+live-proven HIGH defect, not a rubber-stamp re-check), and free of
+BLOCKER/HIGH findings. This repository still calls no embedding
+provider, generates no vector, and accepts no query text — query-text-
+to-vector generation, RAG, an agent tool, and every agent-facing
+capability remain unbuilt. Milestone 4.1 is not complete, and the
+roadmap's own Phase 4 (AI Agents) has not materially progressed beyond
+these five foundation phases.

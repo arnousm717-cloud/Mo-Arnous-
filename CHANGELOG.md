@@ -1751,3 +1751,105 @@ provider, generates no embedding, and accepts no query text.**
   Review.md` "Milestone 4.1 Phase 4"). Milestone 4.1 overall, and the
   roadmap's own Phase 4 overall, remain in progress. Not yet staged,
   committed, or pushed as of this entry.
+
+## Milestone 4.1 Phase 5 — Automated Embedding-Trigger Recovery
+
+**Status: Phase 5 of Milestone 4.1 IMPLEMENTATION ACCEPTED. Milestone
+4.1 as a whole remains IN PROGRESS — not complete. "Phase 5" here is
+an internal Milestone-4.1 implementation increment; it is unrelated to
+the top-level roadmap's own, separate "Phase 5 — Automations"
+(`docs/09-Development-Roadmap.md`), which has not started.**
+
+- **Closes a gap Phase 3 itself disclosed**: Phase 3's discovery
+  function (`findProfilesNeedingEmbedding`) existed but had no runtime
+  caller anywhere — a profile whose live embedding-trigger notification
+  was missed (unconfigured webhook, transient delivery failure) had no
+  automatic recovery path. Phase 5 adds that missing invocation as its
+  own scheduled route, `GET /api/internal/brain-embedding-recovery`
+  (`CRON_SECRET` bearer auth, `*/15 * * * *`), separate from the live
+  per-minute `dispatch-events` cron.
+- **Added** `findEmbeddingRecoveryCandidates` /
+  `findEmbeddingRecoveryCandidatesForEntity` (`packages/brain/src/backfill.ts`)
+  — a state-based, cursor-free discovery query (unlike Phase 3's
+  one-shot forward-only cursor), safe to invoke repeatedly on a fixed
+  schedule; ordering uses a full-precision `md5(id || now())` shuffle
+  for cross-invocation fairness.
+- **Added** `deriveEmbeddingRecoveryEventId` — a deterministic
+  recovery-attempt identity derived from `{profileId}:{computedAt}`,
+  formatted as the `uuid` `workflow_runs.source_event_id` requires.
+- **Added a shared `timingSafeEqualStrings` cron-auth module**
+  (`apps/web/app/api/internal/_shared/cron-auth.ts`), extracted from
+  `dispatch-events` with no behavior change, and reused by the new
+  recovery route.
+- **Added the Vercel Cron entry** for the new route in `apps/web/vercel.json`.
+- **Found during the Final Implementation Acceptance Audit (HIGH,
+  NO-GO)**: the original implementation reused the already-accepted,
+  generic `claimBrainProjectionRun` claim function. Live reproduction
+  proved that a successful (2xx) webhook acknowledgement — recorded as
+  `workflow_runs.status = 'succeeded'` — permanently and unconditionally
+  blocked all future reclaim attempts for that exact profile version,
+  even after 30 simulated days, regardless of whether an embedding was
+  ever actually written. A 2xx response only proves n8n accepted the
+  request, never that the embedding materialized; this defeated Phase
+  5's entire self-healing purpose.
+- **Corrected**: added a Phase-5-specific `claimEmbeddingRecoveryAttempt`
+  function (`packages/brain/src/repository.ts`) reusing the same atomic
+  `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE <reclaim condition>`
+  pattern, with one added disjunct allowing a `'succeeded'` row to
+  become reclaimable again after a 900-second cooldown
+  (`EMBEDDING_RECOVERY_COOLDOWN_SECONDS`) if the profile is still found
+  missing/stale on a later invocation. The pre-existing, already-accepted
+  `claimBrainProjectionRun` is untouched — its permanent-succeeded
+  semantics remain correct for Phase 2/3/lead-scoring's own synchronous,
+  in-process consumers; only Phase 5's asynchronous, webhook-triggered
+  consumer needed different semantics. No migration required — no new
+  column or index, only a new SQL predicate against existing
+  `workflow_runs` columns. The distinct 900s cooldown and the
+  pre-existing 120s crash-recovery claim lease (`CLAIM_LEASE_SECONDS`)
+  are deliberately different concepts and were kept separate.
+- **Fixed (found while writing the correction's own regression test)**:
+  `findEmbeddingRecoveryCandidatesForEntity`'s SQL returned
+  `computed_at` as a bare `timestamptz`, which `node-pg` deserializes as
+  a JS `Date`; template-literal string coercion of that `Date` calls
+  the locale/timezone-dependent `Date.prototype.toString()`, not a
+  stable representation, breaking deterministic re-derivation of the
+  recovery event id. Fixed at the source with an explicit
+  `computed_at::text` SQL cast, verified deterministic across separate
+  DB sessions.
+- **Verified via an independent cross-tenant RLS mutation probe**
+  during the Final Correction Re-Acceptance Audit (session context set
+  to organization B, direct attempt to `SELECT`/`UPDATE` organization
+  A's exact `workflow_runs` row by id): zero visible rows, `UPDATE 0`.
+- **Security**: identical model to `dispatch-events` — `CRON_SECRET`
+  bearer only, constant-time comparison, no session/api_keys auth, no
+  request body, every organization enumerated server-side (never
+  client-supplied), tenant isolation enforced by RLS beneath the
+  structural composite-unique-key claim pattern. No new permission and
+  no new provider secret.
+- **Known gap, explicitly accepted at this scale**: the route
+  enumerates every organization on every 15-minute invocation with no
+  batching/pagination across the organization list itself — appropriate
+  for this milestone's real target scale, revisit only if evidence of
+  real scale pressure emerges. Fairness across a large, sustained
+  backlog is probabilistic (a hash-based shuffle), not a formally
+  guaranteed starvation bound.
+- **One controlled implementation turn**, followed by **one strict
+  read-only Final Implementation Acceptance Audit** that found and
+  live-reproduced the HIGH zero-materialization defect above
+  (**NO-GO**), **one narrowly-scoped targeted correction turn** (no
+  migration required), and **one strict read-only Final Re-Acceptance
+  Audit** that independently reproduced the original 12-step defect
+  scenario against fresh Postgres fixtures, confirmed the cooldown
+  boundary behaves correctly (899s still blocked, 901s succeeds),
+  performed the cross-tenant RLS probe above, and reconfirmed every
+  other previously-accepted finding was undisturbed (**GO**, zero
+  BLOCKER/HIGH remaining).
+- **Test evidence**: domain 23/23, API 20/20, repository 13/13,
+  embedding-backfill 9/9, brain-embeddings-api 19/19, dispatch-events-api
+  12/12, brain-search-api 20/20, lint/typecheck 18/18, build 1/1, serial
+  full suite 3315/3315, default-concurrency full suite 3315/3315, audit
+  clean, `git diff --check` clean.
+- **Milestone 4.1 Phase 5 status: PASS** (`docs/13-Technical-Design-
+  Review.md` "Milestone 4.1 Phase 5"). Milestone 4.1 overall remains IN
+  PROGRESS — not complete. Not yet staged, committed, or pushed as of
+  this entry.

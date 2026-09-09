@@ -3,6 +3,10 @@
     {
       "path": "/api/internal/dispatch-events",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/brain-embedding-recovery",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

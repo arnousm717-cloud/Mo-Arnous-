@@ -9,6 +9,7 @@ export { projectContactProfile, projectCompanyProfile, projectDealProfile, canon
 export {
   upsertEntityProfile,
   claimBrainProjectionRun,
+  claimEmbeddingRecoveryAttempt,
   completeBrainProjectionRun,
   getSyncState,
   upsertSyncState,
@@ -25,7 +26,15 @@ export {
   EVENT_TYPES_BY_ENTITY,
   type ReconcileOutcome,
 } from "./ingestion";
-export { bootstrapBrainForOrganization, findProfilesNeedingEmbedding, type BackfillReport, type EmbeddingBackfillReport } from "./backfill";
+export {
+  bootstrapBrainForOrganization,
+  findProfilesNeedingEmbedding,
+  findEmbeddingRecoveryCandidates,
+  deriveEmbeddingRecoveryEventId,
+  type BackfillReport,
+  type EmbeddingBackfillReport,
+  type EmbeddingRecoveryCandidate,
+} from "./backfill";
 export { BrainError, MalformedEventPayloadError } from "./errors";
 export {
   upsertEntityEmbedding,
