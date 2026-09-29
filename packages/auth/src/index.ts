@@ -59,6 +59,7 @@ export {
   hasScope,
   type ServiceActor,
 } from "./service-auth";
+export { resolveTrustedActorForOrganization } from "./trusted-actor-resolution";
 // refreshSession and exchangeAuthCode are deliberately NOT re-exported here
 // — they must be imported from "@ai-revenue-os/auth/middleware" directly.
 // This barrel pulls in resolveRequestContext, which depends on pg (Node-only
