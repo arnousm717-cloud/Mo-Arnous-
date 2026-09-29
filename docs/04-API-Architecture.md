@@ -33,7 +33,7 @@
 | Tracking Site Public Keys | `/api/v1/tracking-sites/{trackingSiteId}/public-keys`, `/api/v1/tracking-sites/{trackingSiteId}/public-keys/{keyId}/revoke` | Staff (`org_admin` only, `tracking:manage-identity-keys`) | Register/list/revoke the Ed25519 public keys `POST /track/identify` verifies signed assertions against — see §2.7. Never accepts or stores a private key |
 | Lead Scores | `GET /api/v1/contacts/{id}/lead-scores`, `POST .../lead-scores/recalculate` | Staff (`contacts:read`/`contacts:update`) | **New, Milestone 3.4.** Historized — returns the series, `?latest=true` for current. Deterministic, rules-based only, no AI/agent involvement — see §2.9 |
 | Scoring Rules | `/api/v1/scoring-rules`, `/api/v1/scoring-rules/{id}` | Staff (`org_admin` only, `scoring-rules:read`/`write`) | **New, Milestone 3.4.** `GET`/`POST`/`PATCH` — no `DELETE`, `isActive` is the sole retirement mechanism. See §2.9 |
-| Agents | `/api/v1/agents`, `/api/v1/agents/{key}/runs` | Staff | Trigger and inspect agent runs |
+| Agents | `/api/v1/agents`, `/api/v1/agents/{key}/runs` | Staff | **Not built.** Milestone 4.2 ships the `agent_runs` queue schema and repository foundation (`packages/ai-agents`) only; this route is deferred until a real, supported agent key exists (M4.3/M4.4) — see `08-Security.md` §5 |
 | Workflows | `/api/v1/workflows`, `/api/v1/workflows/{id}/runs` | Staff | Tenant-visible pointer to n8n-backed automation |
 | Proposals | `/api/v1/proposals` | Staff (full); **Portal** (read-only, own-organization proposals only, via `/api/v1/portal/proposals`) | Portal namespace is a distinct route tree, not a permission flag on the staff route — see §4 |
 | Portal Documents | `/api/v1/portal/documents` | Portal only | |

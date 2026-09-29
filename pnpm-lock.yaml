@@ -29,6 +29,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@ai-revenue-os/ai-agents':
+        specifier: workspace:*
+        version: link:../../packages/ai-agents
       '@ai-revenue-os/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -90,6 +93,34 @@ importers:
       '@types/react-dom':
         specifier: ^19.0.0
         version: 19.2.3(@types/react@19.2.17)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(terser@5.51.2)
+
+  packages/ai-agents:
+    dependencies:
+      '@ai-revenue-os/brain':
+        specifier: workspace:*
+        version: link:../brain
+      '@ai-revenue-os/database':
+        specifier: workspace:*
+        version: link:../database
+    devDependencies:
+      '@ai-revenue-os/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.20.4
+      pg:
+        specifier: ^8.13.0
+        version: 8.22.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

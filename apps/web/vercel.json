@@ -7,6 +7,10 @@
     {
       "path": "/api/internal/brain-embedding-recovery",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/internal/agent-runs-maintenance",
+      "schedule": "* * * * *"
     }
   ]
 }

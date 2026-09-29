@@ -6622,3 +6622,260 @@ to-vector generation, RAG, an agent tool, and every agent-facing
 capability remain unbuilt. Milestone 4.1 is not complete, and the
 roadmap's own Phase 4 (AI Agents) has not materially progressed beyond
 these five foundation phases.
+
+## Milestone 4.2 — Queued Agent-Execution Worker
+
+**Milestone 4.2 — Queued Agent-Execution Worker. Status: IMPLEMENTATION
+ACCEPTED.** `docs/12-Implementation-Milestones.md`'s own milestone list
+separates this milestone's scope from Milestone 4.3 (Orchestrator +
+Model Router + Tool Layer + Approval Gate) explicitly — this section
+documents queue/worker *mechanics* only. **This repository still
+executes no agent, calls no model provider, and holds no supported
+persona key.** Delivered across four controlled implementation steps,
+each independently audited, plus a dedicated mid-milestone
+architectural-decision cycle that reverted a built-and-audited Staff
+API surface once repository evidence showed no real agent key existed
+to validate against — a genuine scope correction disclosed honestly
+below, not smoothed over.
+
+### Step 1 — Database foundation
+
+`public.agent_runs` (`packages/database`): `id`, `organization_id`
+(tenant-safe FK, `ON DELETE CASCADE`), `agent_key` (a static,
+code-defined identifier with no DB-level allowlist, matching
+`workflow_runs.workflow_key`'s own precedent — deliberately, since no
+`agent_definitions` table exists to reference), `triggered_by` (FK to
+`public.users`, `ON DELETE SET NULL`, matching `audit_logs.actor_user_id`'s
+own precedent), `input` (jsonb), `status` (`queued`/`running`/
+`succeeded`/`failed`), `attempt_count` (default 1, no DB upper bound),
+`started_at`/`completed_at`/`error`/`created_at`. RLS enabled, tenant-
+scoped `SELECT`/`INSERT`/`UPDATE` policies, `authenticated`-role grants
+only. Not registered in `data_retention_policies` — no structured
+entity FK exists on this table, matching `workflow_runs`'s own
+never-registered precedent.
+
+### Step 2 — Claim/lease/retry/fencing state machine
+
+`packages/ai-agents` (`claimAgentRun`/`completeAgentRun`/`failAgentRun`/
+`terminalizeExhaustedAgentRun`/`findClaimableAgentRuns`/
+`findExhaustedAgentRuns`), reusing the exact atomic
+`UPDATE ... WHERE <reclaim condition> RETURNING` idiom
+`claimBrainProjectionRun`/`claimEmbeddingRecoveryAttempt`
+(`packages/brain`) already proved — no `SELECT`-then-`UPDATE`, no
+`SKIP LOCKED`, no advisory lock. Frozen constants: `MAX_ATTEMPTS = 3`,
+`CLAIM_LEASE_SECONDS = 120`, `RETRY_BACKOFF_SECONDS = 60` (fixed, not
+scaling — no repo precedent or real failure-mode data yet to justify
+inventing one). No `lease_expires_at`/`available_at` columns — both
+eligibility boundaries are derived live from `started_at`/`completed_at`,
+matching `claimBrainProjectionRun`'s own idiom over `event_deliveries`'
+stored-column alternative.
+
+**Found during the Final Implementation Acceptance Audit (two HIGH,
+NO-GO)**: (1) a `'running'` row stuck at `MAX_ATTEMPTS` with an expired
+lease had no discovery path anywhere in the repository's own public
+API — `terminalizeExhaustedAgentRun` worked correctly when called
+directly, but nothing could ever find such a row's id, so it would
+remain `'running'` forever in practice; (2) `completeAgentRun`/
+`failAgentRun` had zero stale-claimant fencing — a worker whose lease
+had expired and been reclaimed by a newer generation could still
+overwrite that newer generation's outcome, live-reproduced via the
+exact scenario (Worker A claims attempt 1, lease expires, Worker B
+reclaims attempt 2, stale Worker A's `completeAgentRun` call
+incorrectly succeeded and silently overwrote Worker B's still-current
+attempt).
+
+**Corrected**: `claimAgentRun` now returns `{runId, attemptCount}` from
+the same atomic `UPDATE ... RETURNING` that won the claim — the
+fencing/generation token, reusing the pre-existing `attempt_count`
+column itself rather than adding a new claim/lease/worker-id column.
+`completeAgentRun`/`failAgentRun` now require that exact `attemptCount`
+back and include `attempt_count = $N` in their own `WHERE` clause, so a
+reclaimed row's changed `attempt_count` makes a stale caller's mutation
+a structural no-op. Added `findExhaustedAgentRuns`, the dedicated
+discovery path the first defect required. Both fixes independently
+re-verified via live-Postgres probes during a Final Correction
+Acceptance Audit; one LOW test-coverage gap (a stale-complete-vs-
+current-fail race case) was noted and closed during Step 3.
+
+### Step 3 — Trusted enqueue foundation, reference-only input contract, and a reverted Staff API
+
+`enqueueAgentRun` (`packages/ai-agents`) inserts only `organization_id`/
+`agent_key`/`triggered_by`/`input` — `status`/`attempt_count`/
+timestamps are never parameters, so there is no caller-reachable way to
+insert a row in any state other than the schema's own defaults.
+
+**Found during the Final Implementation Acceptance Audit (BLOCKER +
+HIGH, NO-GO)**: the first implementation accepted a Staff-facing
+`POST /api/v1/agents/{agentKey}/runs` route whose own input validation
+was a negative PII-heuristic denylist, not the Step 1 schema's own
+binding column comment ("references/IDs only, never copied CRM
+content") — live-proven to accept arbitrary free-text business content
+(a note, a transcript, a customer name) that the GDPR erasure-cascade
+exclusion for this column depended on never being possible
+(**BLOCKER**). Separately, `agentKey` validation was shape-only regex,
+not a real allowlist, and no non-speculative, evidence-backed agent key
+existed anywhere in the repository to validate against — every
+persona name found (`docs/03-Database-Architecture.md` line 103) is an
+illustrative ERD entry for the never-built `agent_definitions` table
+(**HIGH**).
+
+**Corrected in two stages**: first, a positive reference-only allowlist
+(`validateAgentRunReferences`, reusing `packages/brain`'s own already-
+accepted `EntityType` — `"contact"|"company"|"deal"` — and its
+`entityType`/`entityId` field convention rather than inventing a new
+shape) replaced the heuristic denylist entirely, enforced identically
+at both the route and the repository layer (a direct-repository-bypass
+proof confirms a caller cannot construct a malformed payload past
+TypeScript and still reach the database) — resolving the BLOCKER.
+Second, a dedicated Final Architectural Decision Audit determined that
+**no legitimate agent key could be named or frozen without either
+fabricating a persona or inventing a placeholder "infrastructure" key
+neither evidenced anywhere in this repository** — `docs/04-API-
+Architecture.md`'s own resource-map annotation convention (cross-
+checked against the real filesystem: Workflows/Proposals/Revenue all
+carry no "New, Milestone X" tag and are genuinely unbuilt) showed the
+"Agents" row was never claimed as an M4.2 deliverable in the first
+place. **The Staff route, `agent_runs:create`, its RBAC migration, and
+its own dedicated test suite were therefore reverted** — not because
+they were incorrect, but because activating them ahead of a real agent
+key would create permanently-unrecognizable queue rows and a premature
+public contract. The already-correct queue-producer foundation
+(`enqueueAgentRun`, `validateAgentRunReferences`, `AgentRunReference`)
+was retained unchanged as reusable M4.2-scope infrastructure. `docs/04`'s
+"Agents" row now reads "Not built"; `docs/08-Security.md` §5 documents
+the reference-only invariant as governing trusted in-process callers
+only, with no live route claim.
+
+### Step 4 — Internal maintenance worker
+
+`GET /api/internal/agent-runs-maintenance` (`CRON_SECRET` bearer auth,
+reusing the existing shared `timingSafeEqualStrings` — no second
+comparison implementation), scheduled `* * * * *` (`apps/web/vercel.json`,
+matching `dispatch-events`'s own already-accepted per-minute cadence).
+**Deliberately maintenance-only, not an execution dispatcher**: a
+dedicated Discovery step determined that M4.2 has no orchestrator, no
+model router, no tool layer, and no agent-key registry, so nothing in
+this repository could legitimately claim a queued or retryable row and
+do something real with it — claiming one would either strand it
+`running` forever or require fabricating a fake outcome, both rejected.
+The route therefore never calls `findClaimableAgentRuns`/`claimAgentRun`
+at all — confirmed by repository-wide search to have zero production
+callers — and only discovers/terminalizes rows already stuck `running`
+at `MAX_ATTEMPTS` with an expired lease (`BATCH_SIZE = 10` per
+organization per pass, matching the constant `packages/ai-agents`'s own
+`DISCOVERY_MAX_LIMIT` comment had already anticipated), server-side
+organization enumeration (no request-selected organization), per-row
+and per-organization failure isolation. A dedicated audit-only
+concurrency probe (seed one exhausted row, two genuinely overlapping
+invocations, compare the summed reported `terminalized` count against
+the real DB-wide delta) confirmed the summary counter does not
+over-report a race it did not actually win.
+
+### Boundary — what this milestone does not ship
+
+No real agent execution, no orchestrator, no model router, no tool
+layer, no approval gate, no `agent_definitions`, no `agent_tool_calls`,
+no `agent_memory`, no cost/token-tracking schema (`docs/09-Development-
+Roadmap.md` ties this to "built alongside the orchestrator" — M4.3, not
+M4.2), no supported persona key, and no live Staff enqueue route.
+Every one of these is explicitly, citably owned by Milestone 4.3
+(Orchestrator + Model Router + Tool Layer + Approval Gate) or later
+(persona milestones 4.4-4.8, monitoring 4.9) — none is an M4.2 defect.
+
+### Audit trail
+
+1. **M4.2 Discovery + Architectural Decision Audit** (strict
+   read-only, two turns): resolved the milestone's own open design
+   questions — ship a real Staff enqueue route now vs. defer, and
+   execution-unit granularity — **GO**.
+2. **Final Retry/Schema Design Freeze** (read-only): froze
+   `MAX_ATTEMPTS`/`CLAIM_LEASE_SECONDS`/`RETRY_BACKOFF_SECONDS`/cron
+   cadence/batch size ahead of implementation — **GO**.
+3. **Step 1** — controlled implementation, then a **Final
+   Implementation Acceptance Audit** independently re-proving every
+   constraint/RLS/grant/GDPR claim live — **GO**.
+4. **Step 2** — controlled implementation, then a **Final
+   Implementation Acceptance Audit** that found and live-reproduced the
+   two HIGH defects above (**NO-GO**), a **Controlled Correction**, and
+   a **Final Correction Acceptance Audit** that independently
+   re-verified both fixes and noted one LOW test-coverage gap — **GO**.
+5. **Step 3** — controlled implementation, then a **Final
+   Implementation Acceptance Audit** that found the BLOCKER + HIGH
+   above (**NO-GO**), a **Controlled Correction** implementing the
+   positive reference-only contract (**NO-GO** again — the agent-key
+   question required an architectural decision, not further
+   engineering), a **Final Architectural Decision Audit** recommending
+   the Staff-route reversion (Option E3), a **Controlled Architectural
+   Correction** implementing that reversion, and a **Final
+   Implementation Acceptance Audit** confirming zero production
+   `enqueueAgentRun` callers and zero Staff surface remaining — **GO**.
+6. **Step 4** — controlled implementation, then a **Final
+   Implementation Acceptance Audit** that independently re-ran every
+   suite from a cold local-environment restart, live-reproduced the
+   119s/121s and no-attempt-4 boundaries, and ran a dedicated new
+   delta-based concurrency probe for summary-counter accuracy — **GO**.
+7. **Post-Step-4 Completion Discovery** (strict read-only): extracted
+   the full M4.2 acceptance contract from authoritative docs, mapped
+   every remaining "not implemented" item to an explicitly later
+   milestone (4.3/4.4/4.9), and confirmed no legitimate further M4.2
+   step exists — **GO, implementation complete**.
+
+### Final validation (Step 4 Final Implementation Acceptance Audit, fresh)
+
+Migration safety **118/118**, Step 1 schema **27/27**, `packages/ai-agents`
+**120/120**, Step 4 targeted **16/16**, `packages/auth` **477/477**,
+`packages/database` **879/879**, `packages/crm` **346/346**,
+`packages/compliance` **52/52**, `packages/intelligence` **150/150**,
+`packages/brain` **134/134**, `packages/tenancy` **46/46**,
+`packages/ui` **39/39**, `apps/web` **1236/1236** — **total 3479/3479**.
+Monorepo lint+typecheck **20/20** clean. `pnpm build` successful, the
+maintenance route confirmed present in build output, zero
+`/api/v1/agents/*` route present. `pnpm audit --audit-level=high`: zero
+high/critical (two pre-existing moderate advisories, unrelated).
+`git diff --check` clean throughout.
+
+**Accepted, non-blocking LOW test-quality gaps** (Step 4): no
+route-level 119-second lease-boundary test (already covered at the
+repository layer), no test forcing an artificial per-row failure at the
+route level, no test forcing an artificial per-organization discovery
+failure at the route level (both hard to force without weakening this
+repository's own no-DB-mocking test convention), and no *permanent*
+committed assertion of summary-counter accuracy under concurrency (the
+property itself was independently, live-verified correct via a
+dedicated audit-only probe, but that specific assertion was not folded
+into the committed suite). None represents a missing M4.2 requirement;
+all remain accepted technical debt, not milestone blockers.
+
+### Deviations from the original M4.2 authorization
+
+1. A full Staff-facing enqueue route (`POST /api/v1/agents/{agentKey}/runs`),
+   its `agent_runs:create` RBAC permission, a paired permission-set
+   migration, and its own dedicated test suite were implemented, fully
+   audited, and accepted as *implementation-correct* during Step 3 —
+   then deliberately reverted in full during a later Step 3 turn once a
+   dedicated architectural-decision audit determined no repository-
+   evidenced agent key existed to validate against, and that `docs/04`'s
+   own established annotation convention never actually claimed this
+   route as an M4.2 deliverable in the first place. This was a scope
+   correction, not a defect in the reverted code itself — the reverted
+   design (RBAC shape, reference-only validation, idempotency wiring)
+   remains valuable prior art for whichever of Milestone 4.3/4.4
+   reactivates it once a real agent key exists.
+2. `packages/ai-agents` was created and given a dependency on
+   `packages/brain` (for `EntityType`) earlier than a first reading of
+   `docs/02-Software-Architecture.md` §4's own package-boundary table
+   might suggest — confirmed, not a deviation in substance, since that
+   table already lists `brain` among `ai-agents`'s own authorized
+   dependencies.
+
+**Milestone 4.2: PASS.** A durable, tenant-safe, crash-recoverable
+agent-run queue — atomic claim/lease/retry with stale-worker fencing,
+dedicated exhausted-state cleanup, a reference-only-enforced trusted
+producer foundation, and a live internal maintenance cron — is
+implemented, adversarially verified across four independently-audited
+steps (two of which required a genuine defect or scope correction, not
+rubber-stamped), and free of BLOCKER/HIGH findings. This repository
+still executes no agent, calls no model, and recognizes no supported
+persona key — Milestone 4.3 (Orchestrator + Model Router + Tool Layer +
+Approval Gate) is the next milestone this queue foundation was built
+for, and has not started.

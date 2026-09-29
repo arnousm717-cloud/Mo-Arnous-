@@ -1853,3 +1853,94 @@ the top-level roadmap's own, separate "Phase 5 — Automations"
   Review.md` "Milestone 4.1 Phase 5"). Milestone 4.1 overall remains IN
   PROGRESS — not complete. Not yet staged, committed, or pushed as of
   this entry.
+
+## Milestone 4.2 — Queued Agent-Execution Worker
+
+**Status: IMPLEMENTATION ACCEPTED.** Durable queue/worker mechanics
+only — `docs/12-Implementation-Milestones.md` separates this
+milestone's scope from Milestone 4.3 (Orchestrator + Model Router +
+Tool Layer + Approval Gate) explicitly. This repository still executes
+no agent, calls no model provider, and holds no supported persona key.
+
+**Added**
+- `public.agent_runs` (`packages/database`) — a durable, tenant-safe,
+  GDPR-correct queue table (`id`, `organization_id`, `agent_key`,
+  `triggered_by`, `input`, `status`, `attempt_count`, timestamps).
+- `packages/ai-agents` — `claimAgentRun`/`completeAgentRun`/
+  `failAgentRun`/`terminalizeExhaustedAgentRun`/
+  `findClaimableAgentRuns`/`findExhaustedAgentRuns`: an atomic
+  claim/lease/retry state machine (`MAX_ATTEMPTS = 3`,
+  `CLAIM_LEASE_SECONDS = 120`, `RETRY_BACKOFF_SECONDS = 60`), reusing
+  the existing `packages/brain` atomic-claim idiom.
+- `enqueueAgentRun`/`validateAgentRunReferences` — a trusted
+  repository-level producer enforcing a positive, references/IDs-only
+  input contract (`{entityType: "contact"|"company"|"deal", entityId: uuid}`,
+  max 10, reusing `packages/brain`'s own `EntityType`) — no free-text,
+  no PII, structurally, not by heuristic.
+- `GET /api/internal/agent-runs-maintenance` (`CRON_SECRET`,
+  `* * * * *`) — an internal, maintenance-only worker that discovers
+  and terminalizes exhausted attempt-3 runs only; it never claims a
+  queued/retryable row, since no orchestrator exists yet to hand one to.
+
+**Found during acceptance and corrected**
+- **Two HIGH defects (Step 2)**: exhausted `'running'` rows had no
+  discovery path (would remain stuck forever in practice); stale
+  claimants could overwrite a newer generation's outcome after their
+  own lease expired and was reclaimed. Fixed by reusing the existing
+  `attempt_count` column as a fencing/generation token (no new column)
+  and adding dedicated exhausted-run discovery.
+- **One BLOCKER + one HIGH (Step 3)**: the first Staff enqueue route's
+  input validation was a negative PII-heuristic denylist, not the
+  reference-only contract the Step 1 schema's own GDPR reasoning
+  depended on — live-proven to accept free-text business content.
+  Separately, no non-speculative agent key existed anywhere in the
+  repository to validate against. Fixed by replacing the heuristic with
+  a positive reference-only allowlist, then — after a dedicated
+  architectural-decision audit found no evidence-backed key or route
+  claim existed for this milestone — **reverting the entire Staff
+  route, `agent_runs:create`, and its permission migration**, retaining
+  only the already-correct queue-producer foundation.
+
+**Architectural decisions and trade-offs**
+- **The Staff enqueue API is deliberately not part of this milestone.**
+  `docs/04-API-Architecture.md`'s own "New, Milestone X" annotation
+  convention (cross-checked against the real filesystem: Workflows/
+  Proposals/Revenue are all genuinely unbuilt and carry no such tag)
+  showed the "Agents" resource-map row was never claimed as an M4.2
+  deliverable. Activating it now would mean this route — not the
+  never-built `agent_definitions` table — silently becomes the real
+  source of truth for "which agents exist." `docs/04`'s row now reads
+  "Not built"; reactivation belongs to Milestone 4.3/4.4, once a real
+  persona/key exists.
+- **The internal maintenance cron never claims new work.** M4.2 has no
+  orchestrator, model router, or tool layer — claiming a queued row
+  would either strand it running forever or require fabricating a fake
+  outcome. It only performs terminal-state hygiene on rows already
+  stuck at max attempts, which requires no interpretation of "what does
+  this agent do."
+
+**Known gaps, explicitly deferred (not oversights)**
+- No real agent execution, orchestrator, model router, tool layer,
+  approval gate, `agent_definitions`, `agent_tool_calls`, `agent_memory`,
+  cost/token-tracking schema, supported persona key, or live Staff
+  enqueue route — every one is explicitly owned by Milestone 4.3 or
+  later persona/monitoring milestones (4.4-4.9), not an M4.2 gap.
+- Four accepted LOW test-quality gaps from the Step 4 acceptance audit
+  (no route-level 119s boundary test, no forced per-row/per-org
+  failure test, no permanent committed summary-counter-concurrency
+  assertion) — all independently verified correct via repository-level
+  tests or a dedicated audit-only probe; none blocks milestone
+  completion.
+
+**Test evidence**: migration safety 118/118, Step 1 schema 27/27,
+`ai-agents` 120/120, Step 4 targeted 16/16, `auth` 477/477, `database`
+879/879, `crm` 346/346, `compliance` 52/52, `intelligence` 150/150,
+`brain` 134/134, `tenancy` 46/46, `ui` 39/39, `web` 1236/1236 —
+**total 3479/3479**. Lint+typecheck 20/20, build clean (maintenance
+route present, zero Staff `/api/v1/agents/*` route), audit clean,
+`git diff --check` clean.
+
+- **Milestone 4.2 status: PASS** (`docs/13-Technical-Design-Review.md`
+  "Milestone 4.2"). Milestone 4.3 (Orchestrator + Model Router + Tool
+  Layer + Approval Gate) has not started. Not yet staged, committed, or
+  pushed as of this entry.

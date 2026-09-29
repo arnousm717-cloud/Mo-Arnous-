@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-revenue-os/ai-agents": "workspace:*",
     "@ai-revenue-os/auth": "workspace:*",
     "@ai-revenue-os/brain": "workspace:*",
     "@ai-revenue-os/compliance": "workspace:*",
