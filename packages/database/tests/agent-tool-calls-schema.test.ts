@@ -200,6 +200,81 @@ describe("agent_runs: the new (organization_id, id) unique constraint added this
   });
 });
 
+describe("agent_tool_calls: attempt_count (Milestone 4.3 Step 2B fencing snapshot)", () => {
+  it("defaults to 1 when omitted", async () => {
+    const organizationId = await seedOrg();
+    const agentRunId = await seedAgentRun(organizationId);
+    const inserted = await insertToolCall(organizationId, agentRunId);
+    const attemptCount = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ attempt_count: number }>(
+        "select attempt_count from public.agent_tool_calls where id = $1",
+        [inserted.rows[0]!.id],
+      );
+      return r.rows[0]!.attempt_count;
+    });
+    expect(attemptCount).toBe(1);
+  });
+
+  it("rejects a null attempt_count", async () => {
+    const organizationId = await seedOrg();
+    const agentRunId = await seedAgentRun(organizationId);
+    await expect(
+      seedAsAdmin(async (client) =>
+        client.query(
+          "insert into public.agent_tool_calls (organization_id, agent_run_id, tool_name, arguments, status, requires_human_approval, attempt_count) values ($1, $2, 'crm.get_contact', '{}'::jsonb, 'succeeded', false, null)",
+          [organizationId, agentRunId],
+        ),
+      ),
+    ).rejects.toThrow(/null value in column "attempt_count"/);
+  });
+
+  it("rejects attempt_count = 0 and negative values (CHECK attempt_count > 0)", async () => {
+    const organizationId = await seedOrg();
+    const agentRunId = await seedAgentRun(organizationId);
+    for (const value of [0, -1]) {
+      await expect(
+        seedAsAdmin(async (client) =>
+          client.query(
+            "insert into public.agent_tool_calls (organization_id, agent_run_id, tool_name, arguments, status, requires_human_approval, attempt_count) values ($1, $2, 'crm.get_contact', '{}'::jsonb, 'succeeded', false, $3)",
+            [organizationId, agentRunId, value],
+          ),
+        ),
+      ).rejects.toThrow(/violates check constraint/);
+    }
+  });
+
+  it("accepts an explicit attempt_count matching the future write-time snapshot use case", async () => {
+    const organizationId = await seedOrg();
+    const agentRunId = await seedAgentRun(organizationId);
+    const inserted = await seedAsAdmin(async (client) =>
+      client.query<{ id: string }>(
+        "insert into public.agent_tool_calls (organization_id, agent_run_id, tool_name, arguments, status, requires_human_approval, attempt_count) values ($1, $2, 'crm.get_contact', '{}'::jsonb, 'succeeded', false, 2) returning id",
+        [organizationId, agentRunId],
+      ),
+    );
+    const attemptCount = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ attempt_count: number }>(
+        "select attempt_count from public.agent_tool_calls where id = $1",
+        [inserted.rows[0]!.id],
+      );
+      return r.rows[0]!.attempt_count;
+    });
+    expect(attemptCount).toBe(2);
+  });
+});
+
+describe("agent_tool_calls: the new (organization_id, id) unique constraint added this step (Milestone 4.3 Step 2B)", () => {
+  it("agent_tool_calls_org_id_unique exists and does not change ordinary single-column uniqueness of id", async () => {
+    const rows = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ conname: string }>(
+        `select conname from pg_constraint where conrelid = 'public.agent_tool_calls'::regclass and conname = 'agent_tool_calls_org_id_unique'`,
+      );
+      return r.rows;
+    });
+    expect(rows).toHaveLength(1);
+  });
+});
+
 describe("agent_tool_calls: tool_name is required", () => {
   it("rejects a null tool_name", async () => {
     const organizationId = await seedOrg();
@@ -427,6 +502,31 @@ describe("agent_tool_calls: RLS — tenant isolation", () => {
       return r.rows[0]!.status;
     });
     expect(stillUnchanged).not.toBe("hijacked");
+  });
+
+  it("an org's own connection cannot transfer its own row to another organization via UPDATE (Milestone 4.3 Step 2B — committed regression for the Step-1 acceptance audit's own disclosed LOW test-coverage gap; live-verified correct at that audit, now covered by a real test)", async () => {
+    const orgA = await seedOrg("Agent Tool Calls Tenant Transfer Org A");
+    const orgB = await seedOrg("Agent Tool Calls Tenant Transfer Org B");
+    const agentRunId = await seedAgentRun(orgA);
+    const inserted = await insertToolCall(orgA, agentRunId);
+
+    await expect(
+      withTenantContext({ organizationId: orgA }, async (client) => {
+        await client.query("update public.agent_tool_calls set organization_id = $1 where id = $2", [
+          orgB,
+          inserted.rows[0]!.id,
+        ]);
+      }),
+    ).rejects.toThrow(/new row violates row-level security policy/);
+
+    const stillOrgA = await seedAsAdmin(async (client) => {
+      const r = await client.query<{ organization_id: string }>(
+        "select organization_id from public.agent_tool_calls where id = $1",
+        [inserted.rows[0]!.id],
+      );
+      return r.rows[0]!.organization_id;
+    });
+    expect(stillOrgA).toBe(orgA);
   });
 
   it("an authenticated-role connection can INSERT a row scoped to its own organization", async () => {

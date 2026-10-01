@@ -319,9 +319,14 @@ describe("data_retention_policies: read-only, platform defaults visible", () => 
     // "brain_embeddings"/"brain_embedding_entity_refs" joined in Milestone
     // 4.1 Phase 1 (20260905090300) — "brain_knowledge_documents"/
     // "brain_sync_state" are deliberately absent, see that migration's own
-    // comment.
+    // comment. "agent_tool_calls"/"agent_tool_call_entity_refs" joined in
+    // Milestone 4.3 Step 2B (20260929100000) — the GDPR entity-reference
+    // prerequisite for a future tool-call executor; see that migration's
+    // own comment.
     expect(rows.map((r) => r.data_type)).toEqual([
       "activities",
+      "agent_tool_call_entity_refs",
+      "agent_tool_calls",
       "audit_logs",
       "brain_embedding_entity_refs",
       "brain_embeddings",
